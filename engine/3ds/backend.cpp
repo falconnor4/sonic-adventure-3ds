@@ -19,6 +19,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include <algorithm>
 #include <new>
 #include <string>
 #include <vector>
@@ -452,6 +453,17 @@ inline void place_bottom(const pc::Vertex &v, bool right, bool lower, Corner &ou
 
 /* draw the placed batches, under an eye's separation. the screen's own
  * draws, the 2D layer, stand at the screen's depth */
+/* the GPU's command buffer, which C3D_Init allocates from linear memory.
+ * libctru's GPUCMD_Add stops the program where a frame passes its end, which
+ * Emerald Coast did on a console with the 3D slider up, its top screen's
+ * batches sent once for each eye. a frame takes the buffer to CMDBUF_FULL at
+ * most, and drops the batches past it, which shows as a frame's missing
+ * geometry and not a stop */
+constexpr uint32_t CMDBUF_BYTES = C3D_DEFAULT_CMDBUF_SIZE * 12;
+constexpr float CMDBUF_FULL = 0.95F;
+uint32_t dropped_batches;
+float cmdbuf_peak;
+
 void draw_batches(Backend &b, const std::vector<Placed> &placed, float separation)
 {
     /* the state the last batch set, so a batch sets only what differs: each
@@ -512,6 +524,10 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
             C3D_DepthTest(true, depth_func(s.depth),
                           s.depth_write ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
             tested = depth_key;
+        }
+        if (C3D_GetCmdBufUsage() >= CMDBUF_FULL) {
+            dropped_batches += (uint32_t)(&placed.back() - &p) + 1;
+            return;
         }
         C3D_DrawArrays(GPU_TRIANGLES, (int)p.first, (int)p.count);
     }
@@ -649,6 +665,7 @@ void render(Backend &b)
     sa3ds_draw_step = 5;
     draw_batches(b, under, 0.0F);
     sa3ds_draw_step = 6;
+    cmdbuf_peak = std::max(cmdbuf_peak, C3D_GetCmdBufUsage());
     C3D_FrameEnd(0);
     sa3ds_draw_step = 7;
 }
@@ -673,7 +690,7 @@ sa_result sa::backend_create(sa_engine &engine)
     b->resources.resize(engine.desc.resources);
     b->textures.reserve(engine.desc.resources);
     b->scene.open(SA_PC_BLEND_TRIANGLE);
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE * 4)) {
+    if (!C3D_Init(CMDBUF_BYTES)) {
         return SA_ERR_UNSUPPORTED;
     }
     b->gpu = true;
@@ -974,6 +991,17 @@ extern "C" {
 volatile uint32_t sa_3ds_audio_peak;
 extern uint64_t sa3ds_ticks_render;
 uint64_t sa3ds_ticks_begin;
+/* the GPU's command buffer's most use, of 1, and the batches it dropped,
+ * since the log last read them (main.c) */
+float sa3ds_cmdbuf_peak(uint32_t *dropped)
+{
+    float peak = cmdbuf_peak;
+
+    *dropped = dropped_batches;
+    cmdbuf_peak = 0.0F;
+    dropped_batches = 0;
+    return peak;
+}
 }
 
 namespace {

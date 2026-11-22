@@ -184,6 +184,14 @@ void native_vsync(void)
 
             native_log("sa3ds: of which C3D_FrameBegin %.2f",
                        sa3ds_ticks_begin * ms);
+        {
+            extern float sa3ds_cmdbuf_peak(uint32_t *dropped);
+            uint32_t dropped = 0;
+            float peak = sa3ds_cmdbuf_peak(&dropped);
+
+            native_log("sa3ds: the GPU's command buffer at most %d%% full, %lu batches dropped",
+                       (int)(peak * 100.0F), (unsigned long)dropped);
+        }
             sa3ds_ticks_begin = 0;
         }
         sa3ds_ticks_give = sa3ds_ticks_render = sa3ds_ticks_wait = 0;
