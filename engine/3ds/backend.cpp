@@ -46,6 +46,7 @@ extern "C" uint64_t sa3ds_ticks_begin, sa3ds_ticks_render;
  * corners' places, each screen's batches, and C3D_FrameEnd */
 extern "C" volatile int sa3ds_draw_step;
 volatile int sa3ds_draw_step;
+extern "C" volatile int sa3ds_texture_step, sa3ds_audio_busy;
 /* the lock the drawing's thread holds, which a storage call from the game's
  * thread takes too (front.c) */
 extern "C" LightLock sa3ds_engine_lock;
@@ -304,11 +305,15 @@ bool copy_texture(Backend &b, const sa_gpu_texels &head, const uint8_t *texels, 
 {
     Texture made;
 
+    sa3ds_texture_step = 3;
     if (!C3D_TexInit(&made.tex, head.width, head.height, (GPU_TEXCOLOR)head.format)) {
         return false;
     }
+    sa3ds_texture_step = 4;
     memcpy(made.tex.data, texels, texels_bytes(head.width, head.height, head.format));
+    sa3ds_texture_step = 5;
     C3D_TexFlush(&made.tex);
+    sa3ds_texture_step = 2;
     made.live = true;
     index = keep_texture(b, made);
     return true;
@@ -1022,6 +1027,7 @@ void audio_main(void *data)
     fpscr_write((fpscr_read() & ~(FPSCR_ROUNDING | FPSCR_TRAPS)) | FPSCR_NEAREST |
                 FPSCR_RUNFAST);
     while (!b.audio_quit) {
+        sa3ds_audio_busy = 1;
         for (ndspWaveBuf &wave : b.waves) {
             if (wave.status != NDSP_WBUF_FREE && wave.status != NDSP_WBUF_DONE) {
                 continue;
@@ -1036,6 +1042,7 @@ void audio_main(void *data)
             DSP_FlushDataCache(wave.data_pcm16, AUDIO_FRAMES * 4);
             ndspChnWaveBufAdd(0, &wave);
         }
+        sa3ds_audio_busy = 0;
         LightEvent_Wait(&b.audio_due);
     }
 }

@@ -10,6 +10,9 @@
 #include "png.h"
 #ifdef SA_3DS
 #include "texels.h"
+
+/* a texture's load's step, which the 3DS's watchdog reports (front.c) */
+extern "C" volatile int sa3ds_texture_step;
 #endif
 
 namespace pc {
@@ -859,12 +862,18 @@ sa_handle Client::packed_texture(int place)
     }
     std::vector<uint8_t> bytes(gpu_bytes[place]);
 
+    sa3ds_texture_step = 1;
     if (fseek(gpu_pack, static_cast<long>(gpu_offsets[place]), SEEK_SET) != 0 ||
         fread(bytes.data(), 1, bytes.size(), gpu_pack) != bytes.size()) {
         failures["can't read a texture from textures.gpu"]++;
+        sa3ds_texture_step = 0;
         return SA_NULL;
     }
-    return make(SA_KIND_TEXTURE, SA_FORMAT_GPU, std::move(bytes));
+    sa3ds_texture_step = 2;
+    sa_handle made = make(SA_KIND_TEXTURE, SA_FORMAT_GPU, std::move(bytes));
+
+    sa3ds_texture_step = 0;
+    return made;
 }
 
 /* the pack's table, where it matches the index's places */

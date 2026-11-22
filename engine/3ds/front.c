@@ -52,6 +52,13 @@ static uint64_t last_vsync_tick;
 enum { GAME_WORKING, GAME_WAITING_DRAWING, GAME_WAITING_VSYNC };
 static volatile int game_phase, drawing_busy;
 static volatile unsigned long drawing_records;
+/* the record in hand and the records taken, and the steps of a texture's
+ * load (client.cpp, backend.cpp) and the sound's mixing, for the watchdog.
+ * records taken that move between two reports say the drawing loops, and
+ * still ones that it waits */
+static volatile uint32_t record_kind;
+static volatile unsigned long records_taken;
+volatile int sa3ds_texture_step, sa3ds_audio_busy;
 
 /* the drawing's thread, and the picture handed to it */
 LightLock sa3ds_engine_lock;
@@ -122,6 +129,8 @@ static void draw_picture(const uint8_t *records, size_t bytes)
         if (head.size < sizeof head) {
             break;
         }
+        record_kind = head.kind;
+        records_taken++;
         result = sa_pc_client_record(client, records + at);
         if (result == SA_PC_QUIT) {
             quit_asked = 1;
@@ -239,6 +248,8 @@ static void watchdog_main(void *unused)
 {
     static const char *const phases[] = {"at work", "waiting for the drawing's thread",
                                          "waiting for a vsync"};
+    static const char *const texture_steps[] = {"none", "reading textures.gpu", "making it",
+                                                "C3D_TexInit", "copying its texels", "C3D_TexFlush"};
     static const char *const steps[] = {"in the records", "ending the scene",
                                         "waiting for the GPU (C3D_FrameBegin)",
                                         "placing the corners", "drawing the top screen",
@@ -262,6 +273,11 @@ static void watchdog_main(void *unused)
                        stalled / 2, seen, game_mode, phases[game_phase],
                        drawing ? (drawing_busy ? "drawing" : "waiting") : "absent",
                        drawing_records, steps[sa3ds_draw_step & 7], native_last_opened);
+            native_log("sa3ds: the record in hand of kind %lu, %lu records taken, a texture's load at %s, "
+                       "the sound %s",
+                       (unsigned long)record_kind, records_taken,
+                       texture_steps[(unsigned)sa3ds_texture_step % 6],
+                       sa3ds_audio_busy ? "mixing" : "waiting");
         }
     }
 }
