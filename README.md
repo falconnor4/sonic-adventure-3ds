@@ -43,11 +43,12 @@ make dc-disc   # build a disc of the port, in build/dc/disc/
 make dc-check  # build and sum the port's objects that need no disc
 make pc        # build the PC game from your disc, in build/engine/
 make play      # play the PC game in a window, from Emerald Coast's start
-make 3ds       # build the 3DS game, build/3ds/sa3ds.3dsx, from your disc
+make 3ds-cia   # build the New 3DS game as a CIA, build/3ds/sa3ds.cia, after make pc
+make 3ds       # build the 3DS game's .3dsx, build/3ds/sa3ds.3dsx, after make pc
 make 3ds-probe # build the 3DS probe's .3dsx, which needs no disc
 ```
 
-The 3DS target builds its sources with devkitARM; `make devkitarm` fetches the toolchain from devkitNix, and [3DS.md](3DS.md) says what each goal builds, how to run the game on a New 3DS or Azahar, and what the target still lacks.
+The 3DS target builds its sources with devkitARM; `make devkitarm` fetches the toolchain from devkitNix. [3DS.md](3DS.md#quick-start-from-your-disc-to-a-new-3ds) walks through building a CIA from your disc and installing it, and says what each goal builds, how to run the game on a New 3DS or Azahar, and what the target still lacks. A CIA or `.3dsx` built from your disc holds its data: keep it to yourself.
 
 `make` compiles every binary's code, reads the data its sources declare from your disc, and checks each binary it rebuilds against the original, PRS compression and all. They land under `build/`, at the disc's own paths. `make` checks `1ST_READ.BIN`, `LOADER.BIN` and each file it reads from `SONICADV/` against [`SHA256SUMS`](SHA256SUMS) before reading it. This is a matching build, so an edit that changes a byte of output fails it.
 

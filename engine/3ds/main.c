@@ -403,10 +403,6 @@ static void read_settings(void)
             extern int sa3ds_fps;
 
             sa3ds_fps = n == 60 ? 60 : 30;
-        } else if (sscanf(line, "soundtest %d", &n) == 1) {
-            extern int sa3ds_sound_test;
-
-            sa3ds_sound_test = n;
         } else if (sscanf(line, "aa %d", &n) == 1) {
             extern int sa3ds_antialias;
 

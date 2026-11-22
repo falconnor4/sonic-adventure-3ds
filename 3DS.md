@@ -9,6 +9,30 @@ the PICA200. The matching reconstruction and the Dreamcast port are untouched:
 [ENGINE.md](ENGINE.md#build-goals) lists every build goal, and
 [PORTS.md](PORTS.md) covers the Dreamcast port.
 
+## Quick start: from your disc to a New 3DS
+
+You need your own copy of the game: the Japanese release, HDR-0001, version
+1.007. Nothing from the disc is in this repository, and nothing the build
+makes from it may be shared.
+
+1. Put the disc's files in `orig/`, named as on the disc (`1ST_READ.BIN`,
+   `LOADER.BIN`, `SONICADV/` and the rest), or its `.gdi` and tracks.
+2. Enter the tools: `nix-shell` in the checkout on Nix or NixOS. Elsewhere,
+   install GNU make, Python 3, clang, a C++ compiler, curl, ImageMagick and
+   patchelf (the last for NixOS's loader only).
+3. `make devkitarm` fetches devkitARM through Nix ([The toolchain](#the-toolchain)).
+4. `make pc` reads the disc into `build/gen/`, which the 3DS build reads, and
+   builds the PC game on the way.
+5. `make 3ds-cia` builds `build/3ds/sa3ds.cia`, about 1.2 GB with the disc's
+   files inside it.
+6. Copy the CIA to the SD card and install it with a title manager such as FBI
+   on a New 3DS (or New 2DS XL) with custom firmware. Put the DSP's firmware at
+   `3ds/dspfirm.cdc` (DSP1 dumps it), or the game is silent.
+
+The game runs from the HOME Menu with no settings. An Old 3DS lacks the memory
+and refuses it. `sa3ds/game.log` on the SD card holds each run's log, which is
+what to send with a bug report.
+
 ## Goals
 
 | Command | What it builds or checks |
@@ -117,8 +141,8 @@ code that the 3DS's kernel doesn't give.
 
 ### Fixed addresses
 
-A `.3dsx` always loads at `0x00100000`, and maps nothing else
-([measured with the probe](#the-memory-domain-measured)). `rambase.py` rewrites
+A `.3dsx` or a CIA always loads at `0x00100000`
+([the memory domain](#the-memory-domain)). `rambase.py` rewrites
 the marked tree, and `--casts` each preprocessed unit, so that:
 
 - main RAM, the game's `0x0c000000` and its `0x8c` and `0xac` views, is 16 MiB
@@ -187,43 +211,50 @@ can't sort per pixel). The backend carries the corners into clip space and
 draws the batches through the texture combiner. The game draws its 16:9
 picture onto the top screen's 400 by 240. With the 3D slider up, each eye's
 picture shifts by depth in the vertex shader; the 2D layer stays at the
-screen. In play, the HUD's counters, the 2D sprites in the picture's corners,
-go to the bottom screen at 1.6 times their size, over a blue gradient that
-stands there in every mode.
+screen. In play, the HUD, each 2D sprite the game pins to an edge of the
+screen (its rings, lives and time, a boss's gauge, Knuckles' radar), goes to
+the bottom screen at 1.6 times its size, over a blue gradient that stands
+there in every mode; the rest of the 2D, a tally's or a menu's, stays on top.
+The top screen is supersampled 2x1 for antialiasing. Where the last frames
+show a split one fits, the game's 30 frames a second each split into two
+pictures, 60 a second with the logic still at 30.
 
 Play math (`engine/numeric/`) keeps the SH-4's bits but for FIPR and FTRV,
 which the 3DS build (`SA_NUMERIC_NATIVE`) computes with the VFP's own
 arithmetic: their exact forms took about a third of the ARM11's time in play.
 
 Sound is the PC's AICA engine, `engine/pc/sound.cpp`, rendered on a thread of
-its own (the third core where there is one) into the DSP's buffers. Music and
-voices stream from the SD card through a 32 KB window rather than whole.
+its own into the DSP's buffers: on the system core where the drawing takes the
+third, else on the third. Music and voices stream from the RomFS through a
+32 KB window rather than whole.
+
+On a console the drawing runs on the New 3DS's third core, beside the game's
+thread on the first. The log reports every ten seconds where a vsync's time
+went, by part, and a watchdog logs where each thread stands if the vsyncs stop.
 
 ## Not done yet
 
 - Fog, and the points' offset colors (specular highlights), aren't drawn.
 - Rumble: the 3DS has none.
-- Real hardware is untested: the figures above are Azahar's. The memory the
-  image needs, some 54 MB and a 58 MB heap of which about 32 MB is used in a
-  stage, assumes the New 3DS's 124 MB application region.
+- Speed: a console holds 30 in the menus, but in the larger stages the
+  drawing's thread takes longer than a frame, so the game slows by up to a
+  quarter. The log's breakdown says where; building the scene from the
+  records and the points' work are the largest parts.
+- The DSP's effects drop out wherever the sound's mixing can't keep up, as
+  above.
 - Play math's results may differ from the Dreamcast's where the SH-4 fuses a
   multiply and add, which the ARM11's VFPv2 can't, so recorded demos may part
   from their recording.
 
-## The memory domain, measured
+## The memory domain
 
-What a homebrew `.3dsx` can address is narrower than the PC's 4 GB domain;
-experiments on Azahar decided the layout:
-
-| Experiment | Result |
-|---|---|
-| A program linked at `0x0c000000`, `0x0b400000` or `0x00100000` | It always runs at `0x00100000`: the 3DSX format carries no segment addresses |
-| `svcControlMemory(MEMOP_ALLOC)` at a fixed address | `0xe0a01bf5` at every address and size |
-| `svcCreateMemoryBlock` + `svcMapMemoryBlock` at `0x0c000000` | The map fails `0xe0a01bf5` |
-| A `NOLOAD` region of 16 MiB in the image's data segment | Mapped, zeroed and writable |
-
-So the only fixed addresses a `.3dsx` gets are those of its own image, and its
-BSS reaches any address between its end and the application region's.
+A `.3dsx` or a CIA loads its image at `0x00100000` whatever its ELF says, and
+a homebrew linked elsewhere runs there all the same. Past the image, the
+application's heap region, from `0x08000000`, takes an allocation at a fixed
+address: `svcControlMemory(MEMOP_ALLOC)` at `0x0c000000` gives the game its
+RAM there on a console and in Azahar alike, before the heap, which lies below
+it. The linear heap, the GPU's, lies apart from both, and takes the
+application's memory that 48 MB of heap leave: some 22 MB in the 124 MB mode.
 
 ## The toolchain
 

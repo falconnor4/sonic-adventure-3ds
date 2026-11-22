@@ -1542,11 +1542,9 @@ void Sound::qsound_place(uint32_t channel, uint32_t place)
 
 #ifdef SA_3DS
 /* the mixing's load since the log last read it: frames, voices played in
- * them, and the DSP's steps run (engine/3ds/main.c). sa3ds_sound_test's bit
- * 1 leaves the DSP out, a measure of its share */
+ * them, and the DSP's steps run (engine/3ds/main.c) */
 extern "C" {
 uint64_t sa3ds_mix_frames, sa3ds_mix_voices, sa3ds_mix_steps;
-int sa3ds_sound_test;
 }
 #endif
 
@@ -1576,9 +1574,6 @@ void Sound::render(int16_t *out, uint32_t frames)
         }
 #ifdef SA_3DS
         sa3ds_mix_frames++;
-        if (dsp_.running() && (sa3ds_sound_test & 1)) {
-            dsp_.stop();
-        }
         sa3ds_mix_steps += dsp_.running() && !effects_bypassed_ ? dsp_.used() : 0;
 #endif
         if (dsp_.running() && !effects_bypassed_) {
