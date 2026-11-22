@@ -56,9 +56,11 @@ TARGET_CXX := $(3DS_BIN)g++
 
 # the game's C keeps SHC's rules, as the native slice compiles it: no strict
 # aliasing, null tests kept, signed arithmetic that wraps, common symbols, no
-# builtins. mathf.h, the SDK's header, names no INFINITY, which the
+# builtins, and each file's objects in the order it defines them, as SHC and
+# clang lay them out and GCC by default does not: the disc's data reads past
+# one array into the next, as Sonic's mouth shapes share their tails. mathf.h, the SDK's header, names no INFINITY, which the
 # non-matching side of path.c takes, and the 3DS prelude gives it
-3DS_CFLAGS := $(3DS_ARCH) -std=gnu89 -O2 -g -fcommon -fno-strict-aliasing -fwrapv -ffp-contract=off \
+3DS_CFLAGS := $(3DS_ARCH) -std=gnu89 -O2 -g -fcommon -fno-strict-aliasing -fwrapv -ffp-contract=off -fno-toplevel-reorder \
 	-fno-delete-null-pointer-checks -fno-builtin -frounding-math \
 	-DNONMATCHING -include engine/native/prelude.h -include engine/3ds/prelude.h -w
 3DS_PROBE_CFLAGS := $(3DS_ARCH) -std=gnu17 -O2 -g -Wall -Wextra -Werror -I$(CTRULIB)/include

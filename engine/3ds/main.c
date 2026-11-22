@@ -45,7 +45,7 @@ static FILE *log_file;
 extern volatile uint32_t sa_3ds_audio_peak;
 /* every this many vsyncs a screenshot of the top screen goes to
  * sa3ds/shots/, where sa3ds/settings.txt gives "shots N". 0 takes none */
-static unsigned long shot_every;
+static unsigned long shot_every, shot_from;
 
 /* the log on the SD card. each line goes out at once, so a fault loses none */
 void native_log(const char *format, ...)
@@ -192,7 +192,7 @@ void native_vsync(void)
                    (unsigned long)sa_3ds_audio_peak);
         sa_3ds_audio_peak = 0;
     }
-    if (shot_every && native_vsyncs % shot_every == 0) {
+    if (shot_every && native_vsyncs >= shot_from && native_vsyncs % shot_every == 0) {
         screenshot();
     }
 }
@@ -350,7 +350,13 @@ static void read_settings(void)
         } else if (sscanf(line, "act %d", &n) == 1) {
             native_target_act = n;
         } else if (sscanf(line, "shots %d", &n) == 1 && n > 0) {
+            int from = 0;
+
             shot_every = (unsigned long)n;
+            /* "shots N FROM" starts at vsync FROM */
+            if (sscanf(line, "shots %*d %d", &from) == 1 && from > 0) {
+                shot_from = (unsigned long)from;
+            }
         } else if (sscanf(line, "thread %d", &n) == 1) {
             extern int sa3ds_drawing_thread;
 
