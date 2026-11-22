@@ -365,6 +365,10 @@ static void read_settings(void)
             if (sscanf(line, "shots %*d %d", &from) == 1 && from > 0) {
                 shot_from = (unsigned long)from;
             }
+        } else if (sscanf(line, "fps %d", &n) == 1) {
+            extern int sa3ds_fps;
+
+            sa3ds_fps = n == 60 ? 60 : 30;
         } else if (sscanf(line, "aa %d", &n) == 1) {
             extern int sa3ds_antialias;
 

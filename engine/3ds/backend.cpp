@@ -52,8 +52,9 @@ extern "C" LightLock sa3ds_engine_lock;
 /* the game's mode, src/main.h's enum game_mode: 4 and 5 are play in a stage
  * or a field, and 9 a stage the menus picked */
 extern "C" int game_mode;
-/* settings.txt's "aa 0" draws the top screen without its supersampling */
-extern "C" int sa3ds_antialias;
+/* settings.txt's "aa 0" draws the top screen without its supersampling, and
+ * "fps 30" holds the game at one picture a frame (front.c) */
+extern "C" int sa3ds_antialias, sa3ds_fps;
 
 namespace {
 
@@ -1514,16 +1515,80 @@ sa_result sa_present_ended(sa_engine *engine, uint32_t instance)
     return engine == nullptr ? SA_ERR_INVALID : SA_OK;
 }
 
+/* whether the next frame may split into two pictures. a split adds a
+ * picture's drawing to the frame and nothing to the game's logic, so where a
+ * frame's work and a second drawing don't fit in its two vsyncs, 60 would
+ * slow the game itself, its logic and its sound with it. the game asks once a
+ * frame, and this measures the frame since: its busy time, all but the waits
+ * for a vsync, and its drawing, the client's records through the GPU's
+ * submission (front.c). at 30 it grants 60 where the busy time and
+ * SIXTY_COST times the drawing come under SIXTY_ENTER of the frame: in
+ * Emerald Coast a split frame's busy time grew by some twice the drawing a
+ * whole frame took, the split's second picture costing more than its first.
+ * at 60 it falls back where the busy time passes SIXTY_LEAVE. each is an
+ * average over some 8 frames, and a change holds SIXTY_HOLD frames, a fall
+ * back from 60 SIXTY_RETRY, so a passing spike moves neither and a frame
+ * that can't hold 60 tries it seldom */
+constexpr float SIXTY_ENTER = 0.85F;
+constexpr float SIXTY_LEAVE = 0.95F;
+constexpr float SIXTY_COST = 2.0F;
+constexpr uint32_t SIXTY_HOLD = 30;
+constexpr uint32_t SIXTY_RETRY = 300;
+constexpr uint32_t SIXTY_WARM = 8;
+
+bool sixty()
+{
+    extern uint64_t sa3ds_ticks_give_ever, sa3ds_ticks_wait_ever;
+    static uint64_t last_tick, last_give, last_wait;
+    static float busy_avg, draw_avg;
+    static bool split;
+    static uint32_t held, measured;
+    const float frame = 2.0F * SYSCLOCK_ARM11 / 59.94F;
+    uint64_t now = svcGetSystemTick();
+    uint64_t give = sa3ds_ticks_give_ever, wait = sa3ds_ticks_wait_ever;
+
+    if (last_tick != 0) {
+        float all = (float)(now - last_tick);
+        float busy = all - (float)(wait - last_wait);
+        float draw = (float)(give - last_give);
+
+        /* a load's frame, seconds long, says nothing of play's */
+        if (all < 4.0F * frame) {
+            busy_avg += (busy - busy_avg) / 8.0F;
+            draw_avg += (draw - draw_avg) / 8.0F;
+            measured++;
+        }
+    }
+    last_tick = now;
+    last_give = give;
+    last_wait = wait;
+    if (held > 0 || measured < SIXTY_WARM) {
+        held -= held > 0;
+        return split;
+    }
+    bool wanted = split ? busy_avg < SIXTY_LEAVE * frame
+                        : busy_avg + SIXTY_COST * draw_avg < SIXTY_ENTER * frame;
+
+    if (wanted != split) {
+        split = wanted;
+        held = split ? SIXTY_HOLD : SIXTY_RETRY;
+        fprintf(stderr, "engine: %d fps, a frame busy %.1f ms and drawing %.1f\n", split ? 60 : 30,
+                busy_avg * 1000.0F / SYSCLOCK_ARM11, draw_avg * 1000.0F / SYSCLOCK_ARM11);
+    }
+    return split;
+}
+
 sa_result sa_present_mode(sa_engine *engine, const sa_mode *asked, sa_mode *applied)
 {
     if (engine == nullptr || asked == nullptr || applied == nullptr) {
         return SA_ERR_INVALID;
     }
     *applied = *asked;
-    /* 60 fps holds at the game's 30: the 3DS draws each picture the game
-     * gives */
-    applied->rate = 30;
-    applied->held = asked->rate != 30 ? 'r' : 0;
+    /* the game asks 60 in play, where its 30 frames a second each split into
+     * two pictures, its logic still at 30. settings.txt's "fps 30" holds
+     * every frame at one, and else sixty() grants 60 only where a frame fits */
+    applied->rate = sa3ds_fps == 60 && asked->rate == 60 && sixty() ? 60 : 30;
+    applied->held = asked->rate != applied->rate ? 'r' : 0;
     return SA_OK;
 }
 

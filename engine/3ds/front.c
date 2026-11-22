@@ -41,6 +41,9 @@ static uint32_t pictures, refused;
  * adapter's records through the client and the scene, the GPU's submission
  * within that, and the waits for a vsync. the rest is the game's */
 uint64_t sa3ds_ticks_give, sa3ds_ticks_render, sa3ds_ticks_wait, sa3ds_ticks_all;
+/* the same drawing and waits, counted from the start and never cleared,
+ * which the backend reads a frame at a time to choose 30 or 60 */
+uint64_t sa3ds_ticks_give_ever, sa3ds_ticks_wait_ever;
 static uint64_t last_vsync_tick;
 
 /* where each thread is, which the watchdog reports: the game's thread at
@@ -66,6 +69,10 @@ int sa3ds_drawing_thread = 0;
 /* the top screen's 2x1 supersampling (backend.cpp), which settings.txt's
  * "aa 0" turns off */
 int sa3ds_antialias = 1;
+/* the pictures a second the game may draw in play: 60 splits each of its 30
+ * frames into two pictures, its logic still at 30. settings.txt's "fps 30"
+ * keeps one picture a frame */
+int sa3ds_fps = 60;
 
 /* Azahar's and Citra's own system information, which a console has none of */
 static int emulated(void)
@@ -126,6 +133,7 @@ static void draw_picture(const uint8_t *records, size_t bytes)
         at += head.size;
     }
     sa3ds_ticks_give += svcGetSystemTick() - began;
+    sa3ds_ticks_give_ever += svcGetSystemTick() - began;
     native_fpu_game(game);
 }
 
@@ -214,6 +222,7 @@ static void wait_vsync(void)
         game_phase = GAME_WORKING;
     }
     sa3ds_ticks_wait += svcGetSystemTick() - now;
+    sa3ds_ticks_wait_ever += svcGetSystemTick() - now;
 }
 
 /* the watchdog: a console that stops in the game, with no fault, freezes
@@ -328,6 +337,9 @@ void native_play_open(const char *disc, int recorded)
     native_sound_engine = sa_3ds_sound(engine) ? engine : NULL;
     if (sa_3ds_wide(engine)) {
         sa1_wide_on();
+    }
+    if (sa3ds_fps == 60) {
+        sa1_fast_on();
     }
     next_vsync = svcGetSystemTick();
     LightLock_Init(&sa3ds_engine_lock);

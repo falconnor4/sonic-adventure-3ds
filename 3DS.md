@@ -85,6 +85,7 @@ The SD card holds:
 | `stage N` and `act N` | begin that act as the opening ends, as the PC's `make play` does (`stage 1` `act 0` is Emerald Coast) |
 | `keys PATH` | play a script of keys, as the PC's `--keys` does |
 | `shots N` or `shots N FROM` | write the top screen to `sa3ds/shots/` every N vsyncs, from vsync FROM if given |
+| `fps 30` | hold every frame at one picture (by default the game splits a frame into two pictures, 60 a second with its logic at 30, wherever the last frames show a split one fits) |
 | `aa 0` | draw the top screen without its 2x1 supersampling (on by default) |
 | `thread 1` | draw on a thread of its own on the New 3DS's third core (off by default: on a console that thread stopped for good inside a picture as Station Square loaded) |
 
