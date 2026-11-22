@@ -368,7 +368,7 @@ $(3DS_DIR)/sa3ds.smdh: $(3DS_ART)/icon.png | $(3DS_DIR)
 	@$(call status,smdh,$@)
 	$(Q)$(3DS_TOOLS)/smdhtool --create "Sonic Adventure" \
 		"Sonic Adventure for the New 3DS" "SEGA" $< $@.tmp
-	$(Q)python3 -c 'import sys; d = bytearray(open(sys.argv[1], "rb").read()); d[0x2029] |= 0x10; open(sys.argv[1], "wb").write(d)' $@.tmp
+	$(Q)python3 engine/tools/smdhflag.py $@.tmp
 	$(Q)mv $@.tmp $@
 
 ## link the 3DS game's .3dsx, from the disc
@@ -392,6 +392,39 @@ $(3DS_PROBE): $(3DS_PROBE_ELF) $(3DS_PROBE_SMDH)
 	$(Q)$(3DS_TOOLS)/3dsxtool $< $@ --smdh=$(3DS_PROBE_SMDH)
 
 3ds-probe: $(3DS_PROBE)
+
+# the probe as CIAs, which install beside the game and tell what fails a
+# launch: each has the game's exheader (sa3ds.rsf) under its own title ID and
+# writes sdmc:/sa3ds/<name>.log. flag has the icon's New 3DS only flag the
+# game's has, plain has none, and big has the flag and the game's 46 MB of
+# data besides. press START to leave one
+3DS_PROBES := $(3DS_DIR)/probes
+3DS_PROBE_KINDS := flag:0xf5a32: plain:0xf5a33: big:0xf5a34:-DPROBE_BALLAST=0x2e00000
+$(3DS_PROBES)/romfs/probe.txt: | $(3DS_DIR)
+	$(Q)mkdir -p $(@D) && echo probe > $@
+define 3DS_PROBE_CIA
+$(3DS_PROBES)/probe-$(1).elf: engine/3ds/probe.c $(3DS_MK)
+	@$$(call status,3ds,$$@)
+	$(Q)mkdir -p $$(@D)
+	$(Q)$(TARGET_CC) $(3DS_PROBE_CFLAGS) -DPROBE_NAME='"probe-$(1)"' $(3) -o $$@ $$< $(3DS_LIBS)
+$(3DS_PROBES)/probe-$(1).smdh: $(CTRULIB)/default_icon.png $(3DS_MK)
+	$(Q)mkdir -p $$(@D)
+	$(Q)$(3DS_TOOLS)/smdhtool --create "SA3DS probe $(1)" "Sonic Adventure 3DS launch probe" "sa3ds" $$< $$@
+	$(Q)$(if $(filter plain,$(1)),true,python3 engine/tools/smdhflag.py $$@)
+$(3DS_PROBES)/probe-$(1).rsf: engine/3ds/sa3ds.rsf
+	$(Q)mkdir -p $$(@D)
+	$(Q)sed -e 's/^\(  UniqueId *: \).*/\1$(2)/' -e 's/^\(  Title *: \).*/\1PRB$(1)/' \
+		-e 's/^\(  ProductCode *: \).*/\1KTR-H-PRB/' $$< > $$@
+$(3DS_PROBES)/probe-$(1).cia: $(3DS_PROBES)/probe-$(1).elf $(3DS_PROBES)/probe-$(1).smdh \
+		$(3DS_PROBES)/probe-$(1).rsf $(3DS_PROBES)/romfs/probe.txt $(MAKEROM)
+	@$$(call status,cia,$$@)
+	$(Q)$(MAKEROM) -f cia -o $$@ -elf $$< -rsf $(3DS_PROBES)/probe-$(1).rsf -icon $(3DS_PROBES)/probe-$(1).smdh \
+		-DROMFS=$$(abspath $(3DS_PROBES)/romfs) -target t 2>&1 | grep -v 'Failed to sign' || true
+	$(Q)[ -s $$@ ] || { echo "$$@: makerom made no CIA"; exit 1; }
+endef
+
+## build the probe CIAs, which tell what fails a launch on a console
+3ds-probes: $(foreach kind,$(3DS_PROBE_KINDS),$(3DS_PROBES)/probe-$(word 1,$(subst :, ,$(kind))).cia)
 
 # the check compiles each source alone, and names the ones the disc's data and
 # the compiler each stop. A compiler error fails it; a source that waits on
@@ -511,4 +544,7 @@ $(3DS_CIA): $(3DS_CIA_ELF) $(MAKEROM) engine/3ds/sa3ds.rsf $(3DS_DIR)/sa3ds.smdh
 3ds: 3ds-image 3ds-probe
 	@$(call status,3ds,$(3DS_IMAGE))
 
-.PHONY: 3ds 3ds-cia 3ds-objects 3ds-image 3ds-probe 3ds-check 3ds-sd devkitarm
+.PHONY: 3ds-probes 3ds 3ds-cia 3ds-objects 3ds-image 3ds-probe 3ds-check 3ds-sd devkitarm
+
+# the probe CIAs' rules, here past MAKEROM, which they name
+$(foreach kind,$(3DS_PROBE_KINDS),$(eval $(call 3DS_PROBE_CIA,$(word 1,$(subst :, ,$(kind))),$(word 2,$(subst :, ,$(kind))),$(word 3,$(subst :, ,$(kind))))))

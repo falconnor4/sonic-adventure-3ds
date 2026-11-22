@@ -12,7 +12,18 @@
 #include <citro3d.h>
 
 #define LOG_DIR "sdmc:/sa3ds"
-#define LOG_PATH LOG_DIR "/probe.log"
+/* the log's name: each of the probe CIAs (make 3ds-probes) writes its own */
+#ifndef PROBE_NAME
+#define PROBE_NAME "probe"
+#endif
+#define LOG_PATH LOG_DIR "/" PROBE_NAME ".log"
+
+/* zeros the size of the game's data and RAM, where -DPROBE_BALLAST asks: a
+ * probe that big tells a launch the game's size fails from one its exheader
+ * or its icon fails */
+#ifdef PROBE_BALLAST
+static volatile unsigned char ballast[PROBE_BALLAST] __attribute__((used, aligned(0x1000)));
+#endif
 
 static FILE *log_file;
 
@@ -77,7 +88,12 @@ int main(int argc, char **argv)
     (void)argv;
     (void)mkdir(LOG_DIR, 0777);
     log_file = fopen(LOG_PATH, "w");
-    say("sa3ds probe start");
+    say("sa3ds %s start", PROBE_NAME);
+#ifdef PROBE_BALLAST
+    ballast[0] = 1;
+    ballast[sizeof ballast - 1] = 1;
+    say("ballast=%lu bytes", (unsigned long)sizeof ballast);
+#endif
     gfxInitDefault();
     say("citro3d=%s", clear_top() ? "ok" : "failed");
     consoleInit(GFX_TOP, NULL);
@@ -95,6 +111,18 @@ int main(int argc, char **argv)
     say("base=%lu bytes, free=%lu", (unsigned long)osGetMemRegionSize(MEMREGION_BASE),
         free_bytes(MEMREGION_BASE));
     gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
+    {
+        Handle limits = 0;
+        s64 most = 0, used = 0;
+        ResourceLimitType kind = RESLIMIT_COMMIT;
+
+        if (R_SUCCEEDED(svcGetResourceLimit(&limits, CUR_PROCESS_HANDLE))) {
+            svcGetResourceLimitLimitValues(&most, limits, &kind, 1);
+            svcGetResourceLimitCurrentValues(&used, limits, &kind, 1);
+            svcCloseHandle(limits);
+        }
+        say("commit limit=%lu bytes, used=%lu", (unsigned long)most, (unsigned long)used);
+    }
     say("framebuffer=%ux%u", (unsigned)width, (unsigned)height);
     say("probe=ok");
     while (aptMainLoop()) {
