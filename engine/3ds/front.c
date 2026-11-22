@@ -57,11 +57,12 @@ static LightEvent drawn, due;
 static uint8_t *picture;
 static size_t picture_bytes, picture_room;
 static volatile int drawing_quit, quit_asked;
-/* settings.txt's "thread 1" asks for the drawing's thread and "thread 0"
- * refuses it. without either a console draws on the New 3DS's third core, a
- * whole core the game's thread leaves free, and Azahar, which runs that core
- * far slower than the first, draws on the game's thread */
-int sa3ds_drawing_thread = -1;
+/* settings.txt's "thread 1" asks for the drawing's thread, on the New 3DS's
+ * third core, and "thread 0" refuses it. without either the game's thread
+ * draws: on a console the drawing's thread stopped for good inside a picture
+ * as Station Square loaded, which the watchdog's report names, and Azahar
+ * runs that core far slower than the first. -1 would choose by the host */
+int sa3ds_drawing_thread = 0;
 /* the top screen's 2x1 supersampling (backend.cpp), which settings.txt's
  * "aa 0" turns off */
 int sa3ds_antialias = 1;
@@ -229,6 +230,12 @@ static void watchdog_main(void *unused)
 {
     static const char *const phases[] = {"at work", "waiting for the drawing's thread",
                                          "waiting for a vsync"};
+    static const char *const steps[] = {"in the records", "ending the scene",
+                                        "waiting for the GPU (C3D_FrameBegin)",
+                                        "placing the corners", "drawing the top screen",
+                                        "drawing the bottom screen", "ending the frame (C3D_FrameEnd)",
+                                        "past C3D_FrameEnd"};
+    extern volatile int sa3ds_draw_step;
     unsigned long seen = native_vsyncs, stalled = 0;
 
     (void)unused;
@@ -242,10 +249,10 @@ static void watchdog_main(void *unused)
         stalled++;
         if (stalled == WATCH_STALL * 2 || (stalled > WATCH_STALL * 2 && stalled % (WATCH_AGAIN * 2) == 0)) {
             native_log("sa3ds: no vsync for %lu s at vsync %lu, game_mode %d: the game's thread %s, "
-                       "the drawing's thread %s after %lu pictures, the last file opened %s",
+                       "the drawing's thread %s after %lu pictures, the drawing %s, the last file opened %s",
                        stalled / 2, seen, game_mode, phases[game_phase],
                        drawing ? (drawing_busy ? "drawing" : "waiting") : "absent",
-                       drawing_records, native_last_opened);
+                       drawing_records, steps[sa3ds_draw_step & 7], native_last_opened);
         }
     }
 }

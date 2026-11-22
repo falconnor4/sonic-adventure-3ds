@@ -40,6 +40,11 @@
 
 /* the time the frame takes, which the runner logs (front.c) */
 extern "C" uint64_t sa3ds_ticks_begin, sa3ds_ticks_render;
+/* where a picture's drawing stands, which front.c's watchdog reports: the
+ * records, the scene's end, the wait for the GPU in C3D_FrameBegin, the
+ * corners' places, each screen's batches, and C3D_FrameEnd */
+extern "C" volatile int sa3ds_draw_step;
+volatile int sa3ds_draw_step;
 /* the lock the drawing's thread holds, which a storage call from the game's
  * thread takes too (front.c) */
 extern "C" LightLock sa3ds_engine_lock;
@@ -562,7 +567,9 @@ void render(Backend &b)
     b.scene.uniform(u);
     uint64_t begin_at = svcGetSystemTick();
     /* no wait for a vblank: the runner paces the game's frames itself */
+    sa3ds_draw_step = 2;
     C3D_FrameBegin(0);
+    sa3ds_draw_step = 3;
     sa3ds_ticks_begin += svcGetSystemTick() - begin_at;
     /* the GPU has drawn the last picture, so what it read may go */
     for (uint32_t index : b.dying_textures) {
@@ -630,6 +637,7 @@ void render(Backend &b)
         C3D_SetBufInfo(&b.buffers);
         C3D_DepthMap(true, -1.0F, 0.0F);
         C3D_CullFace(GPU_CULL_NONE);
+        sa3ds_draw_step = 4;
         draw_batches(b, top, eyes == 2 ? separation : 0.0F);
     }
     /* the bottom screen: its backdrop, and over it the HUD in play */
@@ -638,8 +646,11 @@ void render(Backend &b)
     if (sent > drop) {
         draw_backdrop(b, drop);
     }
+    sa3ds_draw_step = 5;
     draw_batches(b, under, 0.0F);
+    sa3ds_draw_step = 6;
     C3D_FrameEnd(0);
+    sa3ds_draw_step = 7;
 }
 
 } // namespace
@@ -1458,8 +1469,10 @@ sa_result sa_present_end(sa_engine *engine)
 
     uint64_t began = svcGetSystemTick();
 
+    sa3ds_draw_step = 1;
     b.scene.finish();
     render(b);
+    sa3ds_draw_step = 0;
     sa3ds_ticks_render += svcGetSystemTick() - began;
     b.picture = nullptr;
     b.pictures++;

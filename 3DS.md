@@ -86,7 +86,7 @@ The SD card holds:
 | `keys PATH` | play a script of keys, as the PC's `--keys` does |
 | `shots N` or `shots N FROM` | write the top screen to `sa3ds/shots/` every N vsyncs, from vsync FROM if given |
 | `aa 0` | draw the top screen without its 2x1 supersampling (on by default) |
-| `thread 1` or `thread 0` | draw on a thread of its own on the third core, or on the game's thread (by default a console draws on the third core, and Azahar, which runs that core slowly, on the game's thread) |
+| `thread 1` | draw on a thread of its own on the New 3DS's third core (off by default: on a console that thread stopped for good inside a picture as Station Square loaded) |
 
 The 3DS's A, B, X, Y, START and the D-pad are the Dreamcast pad's; L or ZL is
 the left trigger and R or ZR the right; the circle pad is the stick. HOME and
