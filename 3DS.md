@@ -36,14 +36,13 @@ lies on white.
 
 The CIA's exheader is a New 3DS title's: platform SNAKE with a KTR- product
 code, the Old 3DS's standard 64 MB mode, and the New 3DS's 124 MB, 804 MHz and
-L2 cache. The HOME Menu starts a title in the Old 3DS's 64 MB, whatever its
-exheader asks, unless the title's ID marks it New 3DS only, so the CIA's ID
-carries that mark, `000400002F5A3100`'s 2 (makerom's `UseKtrProgramId`), and
-its icon the New 3DS only flag. An Old 3DS mode other than the standard one, a
-developer unit's layout, made the HOME Menu restart the console to launch it.
-Where a console gives the game too little memory all the same, it says so on
-the screen, with the figures. A CIA built before the mark has the ID
-`000400000F5A3100`: delete that title, as it is another one.
+L2 cache, and its icon carries the New 3DS only flag (0x1000), as a retail
+New 3DS title's does: the HOME Menu started it in 64 MB without the flag. A
+title ID marked New 3DS only (`000400002F5A3100`, makerom's `UseKtrProgramId`)
+fails to install with AM's 0xD8E0806A, so the ID stays `000400000F5A3100`. An
+Old 3DS mode other than the standard one, a developer unit's layout, made the
+HOME Menu restart the console to launch it. Where a console gives the game too
+little memory all the same, it says so on the screen, with the figures.
 
 The CIA takes makerom (Project_CTR's) and bannertool (carstene1ns's fork),
 which nixpkgs doesn't package: `make 3ds-cia` fetches each release's Linux

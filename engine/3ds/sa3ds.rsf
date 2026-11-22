@@ -11,16 +11,14 @@ RomFs:
   RootPath                : $(ROMFS)
 
 TitleInfo:
-  # a New 3DS title, as KTR- games are. the HOME Menu launches a title in
-  # the Old 3DS's 64 MB, however its exheader asks, unless the title's ID
-  # marks it New 3DS only, its low word's top four bits 2 (3dbrew's Title
-  # IDs), which makerom's UseKtrProgramId sets. the game needs the 124 MB
+  # a New 3DS title, as KTR- games are, with the plain ID retail ones have:
+  # an ID marked New 3DS only (makerom's UseKtrProgramId) fails to install,
+  # AM's 0xD8E0806A. the icon's New 3DS only flag marks it instead
   Platform                : SNAKE
   Category                : Application
   UniqueId                : 0xf5a31
 
 Option:
-  UseKtrProgramId         : true
   UseOnSD                 : true
   FreeProductCode         : true
   MediaFootPadding        : false
