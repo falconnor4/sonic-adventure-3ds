@@ -27,7 +27,16 @@ compiler; on NixOS, `nix-shell` in the checkout gives them (`shell.nix`).
 
 The `.3dsx` and the `.cia` hold data from your disc in their RomFS, and the
 icon and banner are the disc's label and the opening of its title theme
-(`engine/3ds/host/art.cpp`), so they are for your own use: don't share them.
+(`engine/3ds/host/art.cpp`), so they are for your own use: don't share them. A
+picture of your own at `art/3ds/banner.png` (which git ignores), such as the
+game's logo cut out, takes the banner's place, fitted to 256 by 128 on clear.
+The icon can't be clear: the HOME Menu's icons hold no alpha, so the label
+lies on white.
+
+A New 3DS sometimes starts a title in the Old 3DS's 64 MB however its
+exheader asks, which the game can't run in; it then says so on the screen and
+asks for a restart. The exheader asks for no 804 MHz or L2 cache, which made
+other homebrew start in 64 MB; the runner turns both on as it starts.
 
 The CIA takes makerom (Project_CTR's) and bannertool (carstene1ns's fork),
 which nixpkgs doesn't package: `make 3ds-cia` fetches each release's Linux

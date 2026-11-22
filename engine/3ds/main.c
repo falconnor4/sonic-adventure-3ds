@@ -291,6 +291,11 @@ static void catch_faults(void)
 }
 
 /* a message on the bottom screen for a run that can't start, until START */
+/* set where the console gave the game too little memory to run, with the
+ * memory its resource limit grants, and how much of it the image left */
+static int short_of_memory;
+static u32 granted, granted_free;
+
 static void refuse(const char *words) __attribute__((noreturn));
 static void refuse(const char *words)
 {
@@ -372,8 +377,26 @@ int main(int argc, char **argv)
     gfxInitDefault();
     romfs = romfsInit();
     open_log();
-    native_log("sa3ds: start, romfs %08lx", (unsigned long)romfs);
+    native_log("sa3ds: start, romfs %08lx, %lu MB of application memory",
+               (unsigned long)romfs,
+               (unsigned long)(osGetMemRegionSize(MEMREGION_APPLICATION) >> 20));
     catch_faults();
+    if (short_of_memory) {
+        char words[480];
+
+        snprintf(words, sizeof words,
+                 "The console gave the game %lu MB of memory, where it needs "
+                 "the New 3DS's 124 MB mode.\n\nMemory type %lu, "
+                 "application region %lu MB, %lu MB past the image.\n\n"
+                 "Turn the console off and on, then start the game from the "
+                 "HOME Menu. If this stays, please send a photo of this "
+                 "screen.",
+                 (unsigned long)(granted >> 20),
+                 (unsigned long)*(volatile u32 *)0x1FF80030,
+                 (unsigned long)(osGetMemRegionSize(MEMREGION_APPLICATION) >> 20),
+                 (unsigned long)(granted_free >> 20));
+        refuse(words);
+    }
     read_settings();
     /* a CIA that carries the disc in its RomFS reads it there; else the
      * disc lies on the SD card */
@@ -418,3 +441,51 @@ const int native_disc_sum_count = 0;
  * vertices, framebuffers and sound take some 10 MB in a stage, and gives the rest to the
  * heap, which SA1's client reads the disc's texture files into */
 u32 __ctru_linear_heap_size = 12U << 20;
+
+/* the memory the game needs past its image, heap and linear: under it the
+ * console has started the game in a smaller mode */
+#define HEAP_NEEDED (40U << 20)
+
+/* libctru's, which this takes the place of: the heap and the linear heap
+ * from the application's memory past the image. libctru's stops the program
+ * where there is less than the linear heap asks, before main can say why. a
+ * New 3DS sometimes starts a title asking for 124 MB in the Old 3DS's 64 MB,
+ * which leaves the image some 11 MB. this then takes a small linear heap, and
+ * main tells the player to restart the console */
+extern u32 __ctru_heap, __ctru_heap_size, __ctru_linear_heap;
+extern char *fake_heap_start, *fake_heap_end;
+void mappableInit(u32 address_min, u32 address_max);
+
+void __system_allocateHeaps(void)
+{
+    Handle limits = 0;
+    s64 most = 0, used = 0;
+    ResourceLimitType kind = RESLIMIT_COMMIT;
+    u32 free, at = 0;
+
+    if (R_FAILED(svcGetResourceLimit(&limits, CUR_PROCESS_HANDLE))) {
+        svcBreak(USERBREAK_PANIC);
+    }
+    svcGetResourceLimitLimitValues(&most, limits, &kind, 1);
+    svcGetResourceLimitCurrentValues(&used, limits, &kind, 1);
+    svcCloseHandle(limits);
+    free = (u32)(most - used) & ~0xfffU;
+    granted = (u32)most;
+    granted_free = free;
+    if (free < __ctru_linear_heap_size + HEAP_NEEDED) {
+        short_of_memory = 1;
+        __ctru_linear_heap_size = (free / 2) & ~0xfffU;
+    }
+    __ctru_heap_size = free - __ctru_linear_heap_size;
+    __ctru_heap = OS_HEAP_AREA_BEGIN;
+    if (R_FAILED(svcControlMemory(&at, __ctru_heap, 0, __ctru_heap_size,
+                                  MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE)) ||
+        R_FAILED(svcControlMemory(&__ctru_linear_heap, 0, 0,
+                                  __ctru_linear_heap_size, MEMOP_ALLOC_LINEAR,
+                                  MEMPERM_READ | MEMPERM_WRITE))) {
+        svcBreak(USERBREAK_PANIC);
+    }
+    mappableInit(OS_MAP_AREA_BEGIN, OS_MAP_AREA_END);
+    fake_heap_start = (char *)__ctru_heap;
+    fake_heap_end = fake_heap_start + __ctru_heap_size;
+}

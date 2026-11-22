@@ -13,6 +13,8 @@
 /tools/devkitpro
 /tools/devkitpro.txt
 /tools/3ds-tools
+# the player's own pictures for the 3DS's banner, from their copy of the game
+/art/
 /tools/makerom
 
 # Python's bytecode from a tool run outside make, which puts it in build/

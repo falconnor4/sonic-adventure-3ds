@@ -1,6 +1,6 @@
 /* the CIA's icon and banner, from the disc, made on the host: art ROOT DIR
- * writes DIR/icon.png, the disc's label, 0GDTEX.PVR, at 48 by 48, and
- * DIR/banner.png, the label on its own colors at 256 by 128, which the HOME
+ * writes DIR/icon.png, the disc's label, 0GDTEX.PVR, at 48 by 48 on white,
+ * and DIR/banner.png, the label in the middle of a clear 256 by 128, which the HOME
  * Menu shows as the game is chosen, and DIR/banner.wav, the first seconds of
  * the title's theme, SONICADV/TITLE.ADX, which it plays then. bannertool and
  * smdhtool take them (engine/mk/3ds.mk's 3ds-cia). they hold the disc's own
@@ -220,21 +220,16 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    /* the icon: the label whole, on black where it is clear */
-    std::vector<uint8_t> icon(48 * 48 * 4, 0);
+    /* the icon: the label whole, on white where it is clear. an SMDH's icon
+     * holds no alpha, and the HOME Menu's tiles are white */
+    std::vector<uint8_t> icon(48 * 48 * 4, 255);
 
-    for (size_t i = 3; i < icon.size(); i += 4) {
-        icon[i] = 255;
-    }
     scaled(label, 48, 48, icon, 48, 0, 0);
-    /* the banner: the label at 128 by 128 in the middle, on its own top
-     * left texel's color */
-    std::vector<uint8_t> banner(256 * 128 * 4);
+    /* the banner: the label at 128 by 128 in the middle, clear around it.
+    * the build takes a picture of the player's own in its place, where one
+    * lies at art/3ds/banner.png (engine/mk/3ds.mk) */
+    std::vector<uint8_t> banner(256 * 128 * 4, 0);
 
-    for (size_t i = 0; i < banner.size(); i += 4) {
-        memcpy(&banner[i], label.rgba.data(), 3);
-        banner[i + 3] = 255;
-    }
     scaled(label, 128, 128, banner, 256, 64, 0);
     if (!pc::png_write(dir + "/icon.png", 48, 48, icon) ||
         !pc::png_write(dir + "/banner.png", 256, 128, banner)) {

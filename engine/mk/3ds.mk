@@ -456,9 +456,17 @@ $(3DS_ART)/icon.png $(3DS_ART)/banner.png $(3DS_ART)/banner.wav &: $(3DS_DIR)/ho
 	@$(call status,art,$(3DS_ART))
 	$(Q)mkdir -p $(3DS_ART)
 	$(Q)$< $(NATIVE_DISC) $(3DS_ART)
-$(3DS_ART)/banner.bnr: $(BANNERTOOL) $(3DS_ART)/banner.png $(3DS_ART)/banner.wav
+# the banner's picture: the player's own where art/3ds/banner.png holds one,
+# as the game's logo cut out, fitted to 256 by 128 on clear with ImageMagick;
+# else the disc's label. art/ is the player's, and git keeps none of it
+3DS_BANNER_ART ?= art/3ds/banner.png
+$(3DS_ART)/banner-shown.png: $(3DS_ART)/banner.png $(wildcard $(3DS_BANNER_ART))
+	$(Q)if [ -f "$(3DS_BANNER_ART)" ]; then \
+		magick "$(3DS_BANNER_ART)" -resize 248x124 -background none -gravity center -extent 256x128 \
+			PNG32:$@; else cp $(3DS_ART)/banner.png $@; fi
+$(3DS_ART)/banner.bnr: $(BANNERTOOL) $(3DS_ART)/banner-shown.png $(3DS_ART)/banner.wav
 	@$(call status,banner,$@)
-	$(Q)$(BANNERTOOL) makebanner -i $(3DS_ART)/banner.png -a $(3DS_ART)/banner.wav -o $@ > /dev/null
+	$(Q)$(BANNERTOOL) makebanner -i $(3DS_ART)/banner-shown.png -a $(3DS_ART)/banner.wav -o $@ > /dev/null
 
 # the ELF makerom reads: the image's without the programs' data, which lies in
 # the RomFS, their sections' relocations and the debugging information
