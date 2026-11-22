@@ -33,6 +33,7 @@
 #include "sa_sa1.h"
 #include "scene.h"
 #include "sound.h"
+#include "texels.h"
 
 #include "draw.v.shbin.h"
 #include "prelude.h"
@@ -248,90 +249,53 @@ bool pvr_file(const void *data, uint32_t size, pc::Image &image)
     return pc::pvr_decode(bytes, at, image, why);
 }
 
-uint32_t pot(uint32_t n)
+/* a texture's place among the backend's */
+uint32_t keep_texture(Backend &b, const Texture &made)
 {
-    uint32_t p = 8;
-
-    while (p < n && p < 1024) {
-        p <<= 1;
-    }
-    return p;
-}
-
-/* a pixel's place in the PICA200's tiles: 8 by 8 tiles in rows, each in
- * Morton order */
-inline uint32_t tiled(uint32_t x, uint32_t y, uint32_t width)
-{
-    uint32_t tile = ((y >> 3) * (width >> 3) + (x >> 3)) << 6;
-    uint32_t m = (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) |
-                 ((x & 4) << 2) | ((y & 4) << 3);
-
-    return tile | m;
-}
-
-/* image as a texture of the GPU's: a power of two on each side, from 8 to
- * 1024, sampled from image's nearest texel. its alphas choose the format:
- * none below 255 is RGB565, only 0 and 255 RGBA5551, and any other RGBA4.
- * the GPU's rows run from the bottom up, so the image goes in upside down */
-bool make_texture(Backend &b, const pc::Image &image, uint32_t &index)
-{
-    uint32_t w = pot(image.width), h = pot(image.height);
-    bool opaque = true, binary = true;
-    const uint8_t *rgba = image.rgba.data();
-    size_t count = (size_t)image.width * image.height;
-
-    for (size_t i = 0; i < count; i++) {
-        uint8_t a = rgba[i * 4 + 3];
-
-        opaque = opaque && a == 255;
-        binary = binary && (a == 0 || a == 255);
-    }
-    GPU_TEXCOLOR format = opaque ? GPU_RGB565 : binary ? GPU_RGBA5551 : GPU_RGBA4;
-    Texture made;
-
-    if (!C3D_TexInit(&made.tex, (u16)w, (u16)h, format)) {
-        return false;
-    }
-    auto *out = static_cast<uint16_t *>(made.tex.data);
-    /* each texel's column in the image, found once: the ARM11 divides in
-     * software, and a movie's frames come 30 times a second */
-    static uint32_t columns[1024];
-
-    for (uint32_t x = 0; x < w; x++) {
-        columns[x] = x * image.width / w;
-    }
-    for (uint32_t y = 0; y < h; y++) {
-        const uint8_t *line = &rgba[(size_t)(y * image.height / h) * image.width * 4];
-        /* the GPU's row y from the bottom holds the image's row from the
-         * top that lies h - 1 - y down */
-        uint32_t gy = h - 1 - y;
-
-        for (uint32_t x = 0; x < w; x++) {
-            const uint8_t *p = &line[columns[x] * 4];
-            uint16_t v;
-
-            if (format == GPU_RGB565) {
-                v = (uint16_t)((p[0] >> 3) << 11 | (p[1] >> 2) << 5 | p[2] >> 3);
-            } else if (format == GPU_RGBA5551) {
-                v = (uint16_t)((p[0] >> 3) << 11 | (p[1] >> 3) << 6 |
-                               (p[2] >> 3) << 1 | (p[3] >> 7));
-            } else {
-                v = (uint16_t)((p[0] >> 4) << 12 | (p[1] >> 4) << 8 |
-                               (p[2] >> 4) << 4 | p[3] >> 4);
-            }
-            out[tiled(x, gy, w)] = v;
-        }
-    }
-    C3D_TexFlush(&made.tex);
-    made.live = true;
     if (!b.free_textures.empty()) {
-        index = b.free_textures.back();
+        uint32_t index = b.free_textures.back();
+
         b.free_textures.pop_back();
         b.textures[index - 1] = made;
-    } else {
-        b.textures.push_back(made);
-        index = (uint32_t)b.textures.size();
+        return index;
     }
+    b.textures.push_back(made);
+    return (uint32_t)b.textures.size();
+}
+
+/* image as a texture of the GPU's, as texels.h makes one: a power of two on
+ * each side, sampled from image's nearest texel, in the 16-bit format its
+ * alphas choose */
+bool make_texture(Backend &b, const pc::Image &image, uint32_t &index)
+{
+    uint32_t w = texels_side(image.width), h = texels_side(image.height);
+    uint32_t format = texels_format16(image.rgba.data(), image.width, image.height);
+    static uint32_t columns[1024];
+    Texture made;
+
+    if (!C3D_TexInit(&made.tex, (u16)w, (u16)h, (GPU_TEXCOLOR)format)) {
+        return false;
+    }
+    texels_make16(image.rgba.data(), image.width, image.height, format,
+                  static_cast<uint16_t *>(made.tex.data), w, h, columns);
+    C3D_TexFlush(&made.tex);
+    made.live = true;
+    index = keep_texture(b, made);
+    return true;
+}
+
+/* texels the host made ready (SA_FORMAT_GPU), copied as they are */
+bool copy_texture(Backend &b, const sa_gpu_texels &head, const uint8_t *texels, uint32_t &index)
+{
+    Texture made;
+
+    if (!C3D_TexInit(&made.tex, head.width, head.height, (GPU_TEXCOLOR)head.format)) {
+        return false;
+    }
+    memcpy(made.tex.data, texels, texels_bytes(head.width, head.height, head.format));
+    C3D_TexFlush(&made.tex);
+    made.live = true;
+    index = keep_texture(b, made);
     return true;
 }
 
@@ -1126,6 +1090,7 @@ sa_result sa_resource_create(sa_engine *engine, const sa_resource_desc *desc,
     Backend &b = backend(*engine);
     Resource made;
     pc::Image image;
+    const uint8_t *gpu = nullptr;
 
     switch (desc->format) {
     case SA_FORMAT_MESH:
@@ -1159,6 +1124,21 @@ sa_result sa_resource_create(sa_engine *engine, const sa_resource_desc *desc,
             return SA_ERR_INVALID;
         }
         break;
+    case SA_FORMAT_GPU: {
+        sa_gpu_texels head;
+
+        if (desc->kind != SA_KIND_TEXTURE || desc->bytes < sizeof head) {
+            return SA_ERR_INVALID;
+        }
+        memcpy(&head, desc->data, sizeof head);
+        if (head.width < 8 || head.height < 8 || head.width > 1024 || head.height > 1024 ||
+            (head.width & (head.width - 1)) || (head.height & (head.height - 1)) ||
+            desc->bytes < sizeof head + texels_bytes(head.width, head.height, head.format)) {
+            return SA_ERR_INVALID;
+        }
+        gpu = static_cast<const uint8_t *>(desc->data);
+        break;
+    }
     case SA_FORMAT_MATERIALS:
         if (desc->kind != SA_KIND_MATERIAL ||
             desc->bytes % sizeof(sa_material) != 0 ||
@@ -1183,9 +1163,17 @@ sa_result sa_resource_create(sa_engine *engine, const sa_resource_desc *desc,
         engine->event_reserved--;
         return SA_ERR_FULL;
     }
-    if (desc->kind == SA_KIND_TEXTURE && !make_texture(b, image, made.texture)) {
+    sa_gpu_texels head{};
+
+    if (gpu != nullptr) {
+        memcpy(&head, gpu, sizeof head);
+    }
+    if (desc->kind == SA_KIND_TEXTURE &&
+        !(gpu != nullptr ? copy_texture(b, head, gpu + sizeof head, made.texture)
+                         : make_texture(b, image, made.texture))) {
         fprintf(stderr, "engine: no room for a %lux%lu texture\n",
-                (unsigned long)image.width, (unsigned long)image.height);
+                (unsigned long)(gpu ? head.width : image.width),
+                (unsigned long)(gpu ? head.height : image.height));
         engine->resources.give(handle);
         engine->event_reserved--;
         return SA_ERR_FULL;

@@ -503,9 +503,8 @@ bool Textures::read_index(const std::string &path)
     return ok;
 }
 
-bool Textures::load(const Disc &disc, uint32_t global_index,
-                    const std::string &name, uint32_t file, Image &image,
-                    std::string &why) const
+int Textures::find(uint32_t global_index, const std::string &name,
+                   uint32_t file) const
 {
     const PvrPlace *found = nullptr;
 
@@ -527,6 +526,16 @@ bool Textures::load(const Disc &disc, uint32_t global_index,
             found = &place;
         }
     }
+    return found == nullptr ? -1 : static_cast<int>(found - places_.data());
+}
+
+bool Textures::load(const Disc &disc, uint32_t global_index,
+                    const std::string &name, uint32_t file, Image &image,
+                    std::string &why) const
+{
+    int place = find(global_index, name, file);
+    const PvrPlace *found = place < 0 ? nullptr : &places_[place];
+
     if (found == nullptr) {
         const std::string texture =
             name + ", global index " + std::to_string(global_index);

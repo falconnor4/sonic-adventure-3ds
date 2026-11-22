@@ -50,9 +50,19 @@ static LightEvent drawn, due;
 static uint8_t *picture;
 static size_t picture_bytes, picture_room;
 static volatile int drawing_quit, quit_asked;
-/* settings.txt's "thread 1" asks for the drawing's thread. Azahar runs
- * the third core far slower than the first, so it is off by default */
-int sa3ds_drawing_thread;
+/* settings.txt's "thread 1" asks for the drawing's thread and "thread 0"
+ * refuses it. without either a console draws on the New 3DS's third core, a
+ * whole core the game's thread leaves free, and Azahar, which runs that core
+ * far slower than the first, draws on the game's thread */
+int sa3ds_drawing_thread = -1;
+
+/* Azahar's and Citra's own system information, which a console has none of */
+static int emulated(void)
+{
+    s64 citra = 0;
+
+    return R_SUCCEEDED(svcGetSystemInfo(&citra, 0x20000, 0)) && citra != 0;
+}
 
 struct peripheral {
     uint32_t id, support, on, off, press, release;
@@ -251,6 +261,9 @@ void native_play_open(const char *disc, int recorded)
     }
     next_vsync = svcGetSystemTick();
     LightLock_Init(&sa3ds_engine_lock);
+    if (sa3ds_drawing_thread < 0) {
+        sa3ds_drawing_thread = !emulated();
+    }
     if (sa3ds_drawing_thread) {
         open_drawing();
     }

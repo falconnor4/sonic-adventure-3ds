@@ -362,8 +362,24 @@ $(3DS_ROMFS)/textures.idx: $(3DS_INDEXER) $(wildcard $(NATIVE_DISC)/SONICADV/*.P
 	$(Q)mkdir -p $(@D)
 	$(Q)$(3DS_INDEXER) $(NATIVE_DISC) $@
 
+# each texture of the index as the GPU reads it, ETC1 where it is large
+# (engine/3ds/host/pack.cpp), which the client copies in place of decoding
+# the disc's PVRs as the game runs. it takes the host some minutes, on all its
+# cores
+3DS_PACKER := $(3DS_DIR)/host/pack
+$(3DS_PACKER): engine/3ds/host/pack.cpp engine/3ds/host/etc1.h engine/3ds/texels.h engine/pc/pvr.cpp \
+		engine/pc/disc.cpp engine/pc/pvr.h engine/pc/disc.h
+	@$(call status,c++,$@)
+	$(Q)mkdir -p $(@D)
+	$(Q)$(CXX) -std=c++17 -O2 -pthread -Iengine/pc -Iengine/3ds -I$(ENGINE_INCLUDE) -o $@ engine/3ds/host/pack.cpp \
+		engine/pc/pvr.cpp engine/pc/disc.cpp
+$(3DS_ROMFS)/textures.gpu: $(3DS_PACKER) $(3DS_ROMFS)/textures.idx
+	@$(call status,pack,$@)
+	$(Q)$(3DS_PACKER) $(NATIVE_DISC) $(3DS_ROMFS)/textures.idx $@.tmp
+	$(Q)mv $@.tmp $@
+
 $(3DS_IMAGE): $(3DS_ELF) $(3DS_DIR)/sa3ds.smdh $(3DS_ROMFS)/symbols.bin $(3DS_ROMFS)/programs.txt \
-		$(3DS_ROMFS)/textures.idx
+		$(3DS_ROMFS)/textures.idx $(3DS_ROMFS)/textures.gpu
 	@$(call status,3dsx,$@)
 	$(Q)$(3DS_TOOLS)/3dsxtool $< $@ --smdh=$(3DS_DIR)/sa3ds.smdh --romfs=$(3DS_ROMFS)
 
@@ -524,6 +540,7 @@ $(3DS_CIA_ELF): $(3DS_ELF)
 # copied. the .gdi's tracks stay out: the game reads the files alone
 3DS_CIA_ROMFS := $(3DS_DIR)/romfs-cia
 $(3DS_DIR)/romfs-cia.txt: $(3DS_ROMFS)/symbols.bin $(3DS_ROMFS)/programs.txt $(3DS_ROMFS)/textures.idx \
+		$(3DS_ROMFS)/textures.gpu \
 		$(NATIVE_DISC)/1ST_READ.BIN
 	@$(call status,romfs,$(3DS_CIA_ROMFS))
 	$(Q)rm -rf $(3DS_CIA_ROMFS) && mkdir -p $(3DS_CIA_ROMFS)/disc

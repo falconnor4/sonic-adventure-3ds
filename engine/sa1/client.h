@@ -121,6 +121,15 @@ class Client {
 public:
     Disc disc;
     Textures pvrs;
+#ifdef SA_3DS
+    /* romfs:/textures.gpu, each place of pvrs's index as the GPU reads it,
+     * and its table (engine/3ds/texels.h) */
+    FILE *gpu_pack = nullptr;
+    std::vector<uint32_t> gpu_offsets, gpu_bytes;
+    /* a texture of the index from the pack, or SA_NULL where the pack has
+     * none of it */
+    sa_handle packed_texture(int place);
+#endif
     sa_engine *engine = nullptr;
     Names names;
     std::set<uint32_t> alive;

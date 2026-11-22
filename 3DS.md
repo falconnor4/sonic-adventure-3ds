@@ -85,7 +85,7 @@ The SD card holds:
 | `stage N` and `act N` | begin that act as the opening ends, as the PC's `make play` does (`stage 1` `act 0` is Emerald Coast) |
 | `keys PATH` | play a script of keys, as the PC's `--keys` does |
 | `shots N` | write the top screen to `sa3ds/shots/` every N vsyncs |
-| `thread 1` | draw on a thread of its own on the third core (off by default: Azahar runs that core slowly) |
+| `thread 1` or `thread 0` | draw on a thread of its own on the third core, or on the game's thread (by default a console draws on the third core, and Azahar, which runs that core slowly, on the game's thread) |
 
 The 3DS's A, B, X, Y, START and the D-pad are the Dreamcast pad's; L or ZL is
 the left trigger and R or ZR the right; the circle pad is the stick. HOME and
@@ -155,6 +155,16 @@ game's loader reads the program's file.
 | `symbols.c` | the statics the adapter finds by name, from `romfs:/symbols.bin` |
 | `draw.v.pica` | the vertex shader, with the stereoscopic eye shift |
 | `host/index.cpp` | the host's index of the disc's textures, `romfs:/textures.idx` |
+| `host/pack.cpp`, `host/etc1.h`, `texels.h` | the disc's textures as the GPU reads them, `romfs:/textures.gpu` |
+
+The textures come ready from the host. `make` packs each texture of the index
+once (about a minute on all the host's cores): one at least 64 on each side
+as ETC1, 4 bits a texel, or ETC1A4 where it has alpha, and a smaller one,
+such as the HUD's, in the 16 bits the backend gives. The client copies a
+texture from the pack as the game asks for it, in place of reading its PVM,
+decoding it and converting it on the ARM11, and the GPU's memory holds a
+quarter of the bytes for each large one. A movie's frames, and the textures
+the programs' data carry, are still converted as they come.
 
 Drawing reuses the PC's CPU side: `engine/pc/scene.cpp` lights and places each
 point as the game does and sorts the blend list (by triangle, as the PICA200

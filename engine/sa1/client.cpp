@@ -8,6 +8,9 @@
 
 #include "basic.h"
 #include "png.h"
+#ifdef SA_3DS
+#include "texels.h"
+#endif
 
 namespace pc {
 
@@ -177,6 +180,14 @@ sa_handle Client::texture(uint32_t id)
         return SA_NULL;
     }
     TextureRecord &t = found->second;
+#ifdef SA_3DS
+    /* a texture of the disc's index comes ready from the pack: no PVM to
+     * read and decompress, no PVR to decode and no texels to convert */
+    if (!t.tried && t.texels.empty() && gpu_pack != nullptr) {
+        t.handle = packed_texture(pvrs.find(t.global_index, t.name, t.file));
+        t.tried = t.handle != SA_NULL;
+    }
+#endif
     if (!t.tried) {
         Image image;
         std::string why;
@@ -837,6 +848,58 @@ void Client::report()
 
 extern "C" {
 
+#ifdef SA_3DS
+namespace pc {
+
+sa_handle Client::packed_texture(int place)
+{
+    if (place < 0 || static_cast<size_t>(place) >= gpu_bytes.size() ||
+        gpu_bytes[place] < sizeof(sa_gpu_texels)) {
+        return SA_NULL;
+    }
+    std::vector<uint8_t> bytes(gpu_bytes[place]);
+
+    if (fseek(gpu_pack, static_cast<long>(gpu_offsets[place]), SEEK_SET) != 0 ||
+        fread(bytes.data(), 1, bytes.size(), gpu_pack) != bytes.size()) {
+        failures["can't read a texture from textures.gpu"]++;
+        return SA_NULL;
+    }
+    return make(SA_KIND_TEXTURE, SA_FORMAT_GPU, std::move(bytes));
+}
+
+/* the pack's table, where it matches the index's places */
+static void open_gpu_pack(Client &client)
+{
+    FILE *in = fopen("romfs:/textures.gpu", "rb");
+    char magic[4];
+    uint32_t count = 0;
+
+    if (in == nullptr) {
+        return;
+    }
+    if (fread(magic, 1, 4, in) != 4 || memcmp(magic, TEXELS_MAGIC, 4) != 0 ||
+        fread(&count, sizeof count, 1, in) != 1 || count != client.pvrs.count()) {
+        fclose(in);
+        return;
+    }
+    std::vector<sa_gpu_pack_entry> entries(count);
+
+    if (fread(entries.data(), sizeof(sa_gpu_pack_entry), count, in) != count) {
+        fclose(in);
+        return;
+    }
+    client.gpu_offsets.resize(count);
+    client.gpu_bytes.resize(count);
+    for (uint32_t i = 0; i < count; i++) {
+        client.gpu_offsets[i] = entries[i].offset;
+        client.gpu_bytes[i] = entries[i].bytes;
+    }
+    client.gpu_pack = in;
+}
+
+} // namespace pc
+#endif
+
 sa_pc_client *sa_pc_client_create(sa_engine *engine, const char *const *roots)
 {
     auto *made = new pc::Client;
@@ -851,6 +914,7 @@ sa_pc_client *sa_pc_client_create(sa_engine *engine, const char *const *roots)
     if (!made->pvrs.read_index("romfs:/textures.idx")) {
         made->pvrs.index(made->disc, "SONICADV");
     }
+    open_gpu_pack(*made);
 #else
     made->pvrs.index(made->disc, "SONICADV");
 #endif
