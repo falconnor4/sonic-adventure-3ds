@@ -506,6 +506,17 @@ class Asm2c(unittest.TestCase):
             run = subprocess.run([path / 'small'], check=True, capture_output=True, text=True)
         return run.stdout.split()
 
+    def test_native_mesh_search_and_pool_reuse(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)
+            subprocess.run([sys.executable, ROOT / 'engine/tools/asm2c.py', path / 'mesh.c',
+                            ROOT / 'src/collision/mesh.src'], check=True)
+            subprocess.run(['clang', '-std=gnu17', '-fms-extensions', '-no-pie', '-w',
+                            '-I', ROOT / 'engine/native', '-I', ROOT / 'engine/numeric',
+                            '-o', path / 'search', ROOT / 'engine/tests/native_mesh.c', path / 'mesh.c',
+                            *(ROOT / obj for obj in os.environ['PLAY_MATH'].split()), '-lm'], check=True)
+            subprocess.run([path / 'search'], check=True)
+
     def test_a_source_runs_as_it_reads(self):
         # each ? label is its own function's; a slot runs before its branch
         # and after a BT/S's test; a byte's immediate sign-extends; a BRAF
@@ -1606,8 +1617,9 @@ class Refs(unittest.TestCase):
                 subprocess.run(['clang', *flags, '-S', '-emit-llvm', '-Xclang', '-disable-llvm-passes', '-o', ir,
                                 source], check=True)
                 ir.write_text(refs.Pass(DOMAIN, check).run(ir.read_text()))
+                # as native.mk links a domain past 0: no relaxing, which binutils 2.42 fails at for Scrt1.o's main
                 subprocess.run(['clang', *flags, '-no-pie', '-nostartfiles', f'-Wl,-Ttext-segment={DOMAIN + 0x400000:#x}',
-                                '-o', program, *crt[:3], ir, narrow, '-lc', *crt[3:]], check=True)
+                                '-Wl,--no-relax', '-o', program, *crt[:3], ir, narrow, '-lc', *crt[3:]], check=True)
                 self.assertEqual(subprocess.run([program]).returncode, 0)
                 # a host pointer parked in a reference: truncated unseen, or refused at the narrowing
                 outside = subprocess.run([program, 'x'], capture_output=True, text=True)

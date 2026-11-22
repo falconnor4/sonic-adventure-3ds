@@ -510,9 +510,13 @@ OUT_OF_LINE Bool model_off_screen(const NJS_MODEL *model)
 
 /* PREF the line ZAM_PREFETCH_AHEAD bytes past p. the address is an integer,
  * since it may lie past p's array. SH4ZAM's SHZ_PREFETCH clobbers no memory,
- * where machine.h's prefetch clobbers it for the store queues. but it is an
- * asm volatile, which GCC's scheduler moves no instruction across. so each
- * loop PREFs at the top of a pass, before its loads */
+ * where machine.h's prefetch clobbers it for the store queues. it is still an
+ * asm volatile, which GCC's scheduler moves no instruction across. GCC's
+ * other passes may move a load across it. in the model.o make dc builds, each
+ * strip loop but strips_culled's PREFs at the top of a pass, before its loads.
+ * strips_culled's loops test for a reversed strip first, as the C orders it.
+ * where a polygon gives its own count, that test loads the count ahead of the
+ * PREF */
 static inline void prefetch_ahead(const void *p)
 {
     SHZ_PREFETCH((Uint32)p + ZAM_PREFETCH_AHEAD);
@@ -756,6 +760,8 @@ OUT_OF_LINE const struct bake *bake_admit(const NJS_MODEL *model, Float x,
     struct bake *spare = NULL;
     int i;
 
+    /* at -O3 GCC duplicates the lighting-cache probe eight times */
+#pragma GCC unroll 1
     for (i = 0; i < BAKE_PROBES; i++) {
         struct bake *bake = &bakes[(hash + i) & (BAKE_SLOTS - 1)];
 
@@ -2011,14 +2017,15 @@ ALWAYS_INLINE void sa1_live_model(const NJS_MODEL *model)
     }
 }
 
-/* SA1_LIVE_NESTED: a model in view, in a context its caller opened. it sets
+/* Ninja forms reach this path with MODEL_CLIP clear. their scaled points
+ * still take the near test. the caller opens the context. this sets
  * the shading back to MODULATE_ALPHA for a model in view even when every
  * point is near */
 ALWAYS_INLINE void sa1_live_nested(const NJS_MODEL *model)
 {
     int near_points;
 
-    if (model_in_view(model)) {
+    if (drawer.project == project_like_ninja || model_in_view(model)) {
         take_constant_attr();
         near_points = drawer.project(model);
         if (near_points < model->nbPoint) {

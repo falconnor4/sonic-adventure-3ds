@@ -147,6 +147,20 @@ int32_t clamp16(int32_t x)
     return x > 32767 ? 32767 : x < -32768 ? -32768 : x;
 }
 
+/* an ADPCM code's sample and step, from the sample and step before it */
+void adpcm_decode(uint32_t code, int32_t &value, int32_t &quant)
+{
+    int32_t change = quant * ADPCM_SIZE[code & 7] / 8;
+
+    /* the change holds at 0x7fff, as on the AICA */
+    change = change > 0x7fff ? 0x7fff : change;
+    value = clamp16(value + (code & 8 ? -change : change));
+    quant = quant * ADPCM_SCALE[code & 7] >> 8;
+    quant = quant < ADPCM_LEAST  ? ADPCM_LEAST
+            : quant > ADPCM_MOST ? ADPCM_MOST
+                                 : quant;
+}
+
 /* it returns bank + offset where count records of each bytes fit in size,
  * and null otherwise. it divides, so no sum wraps */
 const uint8_t *within(const uint8_t *bank, uint32_t size, uint32_t offset,
@@ -217,36 +231,27 @@ double decibels(double db)
     return pow(10.0, db / 20.0);
 }
 
-#ifdef SA_3DS
-/* the envelope's gain at a level, decibels(-level * 3 / 32), from a table of
- * each whole level and a line between two: the ARM11 takes pow in software,
- * and a voice asked it every sample, which with the DSP filled a core. the
- * line is within some 1e-5 of the curve */
+/* the gain of an envelope's level, from 0 to LEVELS - 1. each whole level's
+ * gain is worked out once, not each frame of each voice. a level between two
+ * takes the line between their gains, which strays from the curve by under
+ * 0.0002 dB */
 float envelope_gain(double level)
 {
-    static float table[1026];
-    static bool made;
+    static const struct Gains {
+        float at[static_cast<int>(LEVELS) + 1];
 
-    if (!made) {
-        for (uint32_t i = 0; i < 1026; i++) {
-            table[i] = static_cast<float>(decibels(-static_cast<double>(i) * 3.0 / 32.0));
+        Gains()
+        {
+            for (int i = 0; i <= static_cast<int>(LEVELS); i++) {
+                at[i] = static_cast<float>(decibels(-i * 3.0 / 32.0));
+            }
         }
-        made = true;
-    }
-    float at = static_cast<float>(level);
+    } gains;
+    int whole = static_cast<int>(level);
+    float part = static_cast<float>(level - whole);
 
-    if (!(at > 0.0F)) {
-        return table[0];
-    }
-    if (at >= 1024.0F) {
-        return table[1024];
-    }
-    uint32_t i = static_cast<uint32_t>(at);
-    float f = at - static_cast<float>(i);
-
-    return table[i] + (table[i + 1] - table[i]) * f;
+    return gains.at[whole] + (gains.at[whole + 1] - gains.at[whole]) * part;
 }
-#endif
 
 /* the filter's damping by its resonance Q. the AICA documents a resonance of
  * -3 dB at 0, rising 0.75 dB a step. this curve gives the same at 4 and
@@ -397,14 +402,33 @@ const uint8_t *Sound::stream_at(Stream &s, uint32_t at, uint32_t n)
 #endif
 }
 
+/* what the queue refuses is lost. the next render first carries out what
+ * was queued before the refusal, then silences what plays. until then the
+ * queue takes nothing more, so the silence falls where the refusal did. a
+ * program or sequence bank refused is forgotten then. so its notes go
+ * unplayed, not played from the bank it was to replace */
+void Sound::lose(const sa_audio_bank *bank, uint32_t count)
+{
+    if (bank && bank->number < BANKS &&
+        (bank->kind == SA_BANK_PROGRAMS || bank->kind == SA_BANK_SEQUENCES)) {
+        lost_banks_[bank->kind == SA_BANK_SEQUENCES][bank->number / 64]
+            .fetch_or(1ULL << bank->number % 64, std::memory_order_relaxed);
+    }
+    refused_.fetch_add(count, std::memory_order_relaxed);
+    lost_.fetch_add(1, std::memory_order_release);
+}
+
 bool Sound::push(const Entry &entry, const void *data, uint32_t bytes)
 {
     uint32_t tail = tail_.load(std::memory_order_relaxed);
     uint32_t queued = tail - head_.load(std::memory_order_acquire);
     uint64_t at = bytes_tail_;
+    const sa_audio_bank *bank =
+        entry.what == ENTRY_BANK ? &entry.bank : nullptr;
 
-    if (queued >= QUEUE || bytes > SOUND_BYTES) {
-        refused_.fetch_add(1, std::memory_order_relaxed);
+    if (lost_.load(std::memory_order_relaxed) != 0 || queued >= QUEUE ||
+        bytes > SOUND_BYTES) {
+        lose(bank, 1);
         return false;
     }
     if (at % SOUND_BYTES + bytes > SOUND_BYTES) {
@@ -412,7 +436,7 @@ bool Sound::push(const Entry &entry, const void *data, uint32_t bytes)
     }
     if (at + bytes - bytes_head_.load(std::memory_order_acquire) >
         SOUND_BYTES) {
-        refused_.fetch_add(1, std::memory_order_relaxed);
+        lose(bank, 1);
         return false;
     }
     Entry &slot = queue_[tail % QUEUE];
@@ -439,8 +463,9 @@ sa_result Sound::submit(const sa_audio_command *commands, uint32_t count)
     uint32_t tail = tail_.load(std::memory_order_relaxed);
     uint32_t queued = tail - head_.load(std::memory_order_acquire);
 
-    if (count > QUEUE - queued) {
-        refused_.fetch_add(count, std::memory_order_relaxed);
+    if (count > QUEUE - queued ||
+        (count != 0 && lost_.load(std::memory_order_relaxed) != 0)) {
+        lose(nullptr, count);
         return SA_ERR_FULL;
     }
     for (uint32_t i = 0; i < count; i++) {
@@ -524,8 +549,12 @@ sa_pc_sound_stats Sound::stats() const
     return s;
 }
 
+/* the count of refusals is read before the tail. so the queue up to the
+ * tail holds all that came before them. the game's thread queues nothing
+ * after them until the count clears */
 void Sound::drain()
 {
+    uint32_t lost = lost_.load(std::memory_order_acquire);
     uint32_t head = head_.load(std::memory_order_relaxed);
     uint32_t tail = tail_.load(std::memory_order_acquire);
 
@@ -654,6 +683,45 @@ void Sound::drain()
             bytes_head_.store(e.end, std::memory_order_release);
         }
         head_.store(head + 1, std::memory_order_release);
+    }
+    /* a refusal since the count was read keeps it from clearing. the next
+     * drain then silences again */
+    if (lost != 0) {
+        silence();
+        lost_.compare_exchange_strong(lost, 0, std::memory_order_relaxed);
+    }
+}
+
+/* each sequence, voice and stream stops. a voice stops at once, not by its
+ * release. a release of rate 0 adds nothing a frame, so it never ends a
+ * voice that loops. a stream's wait goes too, since the start it waits for
+ * comes after the refusal. each bank refused is forgotten */
+void Sound::silence()
+{
+    for (uint32_t port = 0; port < PORTS; port++) {
+        sequence_stop(port);
+    }
+    for (Voice &v : voices_) {
+        v.on = false;
+    }
+    for (uint32_t i = 0; i < STREAMS; i++) {
+        streams_[i].playing = false;
+        wait_[i] = 0;
+    }
+    for (uint32_t word = 0; word < BANKS / 64; word++) {
+        uint64_t programs =
+            lost_banks_[0][word].exchange(0, std::memory_order_relaxed);
+        uint64_t sequences =
+            lost_banks_[1][word].exchange(0, std::memory_order_relaxed);
+
+        for (uint32_t bit = 0; bit < 64; bit++) {
+            if (programs >> bit & 1) {
+                programs_[64 * word + bit] = Place{};
+            }
+            if (sequences >> bit & 1) {
+                sequence_banks_[64 * word + bit] = Place{};
+            }
+        }
     }
 }
 
@@ -981,19 +1049,29 @@ int32_t Sound::sample(Voice &v, uint32_t at)
         }
         uint32_t code = memory_[v.start + n / 2] >> (n & 1 ? 4 : 0) & 15;
 
-        int32_t change = v.quant * ADPCM_SIZE[code & 7] / 8;
-
-        /* the change holds at 0x7fff, as on the AICA */
-        change = change > 0x7fff ? 0x7fff : change;
         v.previous = v.value;
-        v.value = clamp16(v.value + (code & 8 ? -change : change));
-        v.quant = v.quant * ADPCM_SCALE[code & 7] >> 8;
-        v.quant = v.quant < ADPCM_LEAST  ? ADPCM_LEAST
-                  : v.quant > ADPCM_MOST ? ADPCM_MOST
-                                         : v.quant;
+        adpcm_decode(code, v.value, v.quant);
         v.decoded++;
     }
     return at + 1 == v.decoded ? v.value : v.previous;
+}
+
+/* the sample a voice's loop starts with, as the voice takes it once it
+ * wraps. ADPCM decodes it from the state saved at the loop's start */
+int32_t Sound::loop_first(Voice &v)
+{
+    uint32_t n = v.loop_start;
+    int32_t value = v.loop_value, quant = v.loop_quant;
+
+    if (v.format != FORMAT_ADPCM) {
+        return sample(v, n);
+    }
+    if (!v.loop_saved || v.start + n / 2 >= SOUND_MEMORY) {
+        return 0;
+    }
+    adpcm_decode(memory_[v.start + n / 2] >> (n & 1 ? 4 : 0) & 15, value,
+                 quant);
+    return value;
 }
 
 /* the LFO's frame: pitch, a factor of the step, and gain. a wave is a saw,
@@ -1081,22 +1159,15 @@ float Sound::filter_frame(Voice &v, float x)
 
 void Sound::voice_frame(Voice &v, float &left, float &right)
 {
-    /* a voice whose step outruns its loop passes every sample sound memory
-     * can hold, at two a byte. ending it there keeps its position, and each
-     * address plus a sample's index, far within 32 bits */
-    if (v.position >= 2.0 * SOUND_MEMORY) {
-        v.on = false;
-        return;
-    }
-    uint32_t at = static_cast<uint32_t>(v.position);
-
-    if (at >= v.loop_end) {
+    if (v.position >= v.loop_end) {
         if (!v.loops || v.loop_end <= v.loop_start) {
             v.on = false;
             return;
         }
-        v.position -= v.loop_end - v.loop_start;
-        at = static_cast<uint32_t>(v.position);
+        double length = v.loop_end - v.loop_start;
+        double past = v.position - v.loop_end;
+
+        v.position = v.loop_start + (past < length ? past : fmod(past, length));
         if (v.format == FORMAT_ADPCM && v.loop_saved) {
             v.decoded = v.loop_start;
             v.value = v.loop_value;
@@ -1104,13 +1175,20 @@ void Sound::voice_frame(Voice &v, float &left, float &right)
         }
     }
     /* the AICA interpolates between the samples around the position. ADPCM
-     * decodes the next first, which leaves this one in previous */
+     * decodes the next first, which leaves this one in previous. the sample
+     * after a loop's last is its first, as MAME's aica.cpp has it for PCM. a
+     * voice with no loop holds its last sample to its end, where MAME ends
+     * it a sample sooner */
+    uint32_t at = static_cast<uint32_t>(v.position);
     double frac = v.position - at;
     int32_t a, b;
 
     if (at + 1 < v.loop_end) {
         b = sample(v, at + 1);
         a = v.format == FORMAT_ADPCM ? v.previous : sample(v, at);
+    } else if (v.loops && v.loop_end > v.loop_start) {
+        a = sample(v, at);
+        b = loop_first(v);
     } else {
         a = b = sample(v, at);
     }
@@ -1149,12 +1227,8 @@ void Sound::voice_frame(Voice &v, float &left, float &right)
     if (v.filtered) {
         x = filter_frame(v, x);
     }
-#ifdef SA_3DS
-    float out = x * v.gain * envelope_gain(v.level) * static_cast<float>(lfo_gain);
-#else
-    float out = x * v.gain *
-                static_cast<float>(decibels(-v.level * 3.0 / 32.0) * lfo_gain);
-#endif
+    float out =
+        x * v.gain * static_cast<float>(envelope_gain(v.level) * lfo_gain);
 
     left += out * v.direct_left;
     right += out * v.direct_right;
@@ -1170,7 +1244,8 @@ void Sound::voice_frame(Voice &v, float &left, float &right)
  * start 4 past the offset at 2. they take the channels in turn. the stream
  * loops where sa_audio_stream says its file holds a loop. the loop's words
  * lie at one place whatever version the header gives, as adx_dcd.c's
- * ADX_DecodeInfoExLoop reads them */
+ * ADX_DecodeInfoExLoop reads them. a rate of 0 plays no sample, and
+ * ADX_GetCoefficient would divide by it */
 void Sound::start_stream(uint32_t index, const uint8_t *data, uint32_t bytes)
 {
     Stream &s = streams_[index];
@@ -1179,7 +1254,8 @@ void Sound::start_stream(uint32_t index, const uint8_t *data, uint32_t bytes)
     wait_[index] = 0;
     s.playing = false;
     if (!data || bytes < 0x2c || big16(data) != 0x8000 || data[4] != 3 ||
-        data[5] != ADX_BLOCK || data[7] < 1 || data[7] > STREAM_CHANNELS) {
+        data[5] != ADX_BLOCK || data[7] < 1 || data[7] > STREAM_CHANNELS ||
+        big32(data + 8) == 0) {
         return;
     }
 #ifdef SA_3DS
@@ -1212,7 +1288,7 @@ void Sound::start_stream(uint32_t index, const uint8_t *data, uint32_t bytes)
               big16(data + ADX_LOOPS) == 1;
     s.loop_start = s.loops ? big32(data + ADX_LOOP_START) : 0;
     s.loop_end = s.loops ? big32(data + ADX_LOOP_END) : s.samples;
-    if (s.rate == 0 || s.loop_end <= s.loop_start || s.loop_end > s.samples) {
+    if (s.loop_end <= s.loop_start || s.loop_end > s.samples) {
         s.loops = false;
     }
     /* as ADX_GetCoefficient, in the game's single precision */
@@ -1229,7 +1305,7 @@ void Sound::start_stream(uint32_t index, const uint8_t *data, uint32_t bytes)
     s.block_at = ~0U;
     s.position = 0;
     s.ending = false;
-    s.playing = s.rate != 0 && stream_take(s, s.current);
+    s.playing = stream_take(s, s.current);
     if (s.playing && !stream_take(s, s.following)) {
         s.ending = true;
         s.following[0] = s.current[0];

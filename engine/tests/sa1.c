@@ -48,6 +48,7 @@ void present_draw(struct task *task, void (*draw)(struct task *task))
  * frame is a frame of play that shows two pictures */
 int frame_later_draws;
 Uint32 port_sprites_sent, port_draws_sent;
+Int port_wide_cover;
 Int present_record(enum present_kind kind, const void *what, Int count, Int a,
                    Float pri, Uint32 attr)
 {
@@ -799,6 +800,40 @@ static void screen_polygons(void)
     }
 }
 
+static void readout_band(void)
+{
+    const uint32_t color = 0xa0000000;
+    sa_triangles header;
+    KMDWORD tsp = _nj_parameterkm_.TSPPARAMBUFFER;
+    const uint8_t *at;
+    int before = 0;
+
+    while (record(SA_CAP_TRIANGLES, before)) {
+        before++;
+    }
+    port_wide_cover = TRUE;
+    sa1_record_band(456, 60, 568, 84, color);
+    CHECK(port_wide_cover && _nj_parameterkm_.TSPPARAMBUFFER == tsp);
+    port_wide_cover = FALSE;
+    __wrap_frame_wait();
+    read_file();
+    at = record(SA_CAP_TRIANGLES, before);
+    CHECK(at);
+    memcpy(&header, at, sizeof header);
+    CHECK(header.count == 2 && header.form == SA_TRIANGLES_STRIP);
+    CHECK(header.flags == (SA_TRIANGLES_SCREEN | SA_TRIANGLES_BLEND));
+    CHECK(header.depth == SA_DEPTH_ALWAYS && header.fog == SA_FOG_NONE);
+    CHECK(header.src == SA_BLEND_SRC_ALPHA &&
+          header.dst == SA_BLEND_INV_SRC_ALPHA);
+    for (int i = 0; i < 4; i++) {
+        sa_point point;
+        memcpy(&point, at + sizeof header + i * sizeof point, sizeof point);
+        CHECK(point.at[0] == (i < 2 ? 456 : 568) &&
+              point.at[1] == (i % 2 ? 84 : 60));
+        CHECK(point.at[2] == 1 && point.color == color);
+    }
+}
+
 /* Ninja's lines go as two points each, in the object's space. a strip's line i
  * joins points i and i + 1. a fan's joins points 0 and i + 1, and any other's
  * joins 2i and 2i + 1 */
@@ -909,8 +944,29 @@ static void ninja_forms(void)
     draw_model_unculled(&model);
     sa1_live_forms(FALSE);
     draw_model_nested(&model);
+    /* the model center misses the near plane by more than its unscaled
+     * radius. Scaling brings its vertices into view for the Ninja draw */
+    static NJS_POINT3 scaled_points[4];
+    static NJS_MODEL scaled;
+    scaled = model;
+    memcpy(scaled_points, points, sizeof scaled_points);
+    for (int i = 0; i < 4; i++) {
+        scaled_points[i].x *= 0.1F;
+        scaled_points[i].y *= 0.1F;
+        scaled_points[i].z = 0.98F;
+    }
+    scaled.points = scaled_points;
+    scaled.r = 1.0F;
+    xmtrx[0] = xmtrx[5] = xmtrx[10] = 1.1F;
+    xmtrx[14] = sa1_screen.near_clip - 1.05F;
+    draw_model_nested(&scaled);
+    sa1_live_forms(TRUE);
+    draw_model_nested(&scaled);
+    sa1_live_forms(FALSE);
     __wrap_frame_wait();
     read_file();
+    CHECK(draw_of(before + 7).flags & SA_DRAW_OUT);
+    CHECK(!(draw_of(before + 8).flags & SA_DRAW_OUT));
     for (int i = 0; i < 7; i++) {
         sa_draw draw = draw_of(before + i);
         uint16_t flags = material_of(&draw, 0).flags;
@@ -1101,6 +1157,73 @@ static void palette_versions(void)
     }
     /* the fourth picture's are the third's, and take no record */
     CHECK(versions == before + 3);
+}
+
+/* a palette draw takes the palettes as they stand at its call. Sky Deck's sky
+ * sets every unlit offset gray for its own draw alone. so a new version comes
+ * among the picture's draws, between the draw ahead of the sky and the sky's.
+ * the picture names the version before. both draws here are of one model,
+ * unlit and textured, so its points take the unlit offsets. the pictures test
+ * holds each draw to its own version's colors */
+static void palettes_among_draws(void)
+{
+    enum { UNLIT = SA_PALETTES * SA_PALETTE_ENTRIES * 2 };
+    const Uint32 base = 0xff406080;
+    const Uint32 gray = 0x00505050;
+    static Uint32 kept[sizeof sa1_live_colors / sizeof sa1_live_colors[0]];
+    static NJS_MATERIAL unlit = {.attrflags = NJD_FLAG_USE_TEXTURE |
+                                              NJD_FLAG_IGNORE_LIGHT};
+    static NJS_MESHSET set;
+    static NJS_MODEL sky = {points, normals, 4,         &set, &unlit,
+                            1,      1,       {0, 0, 0}, 2};
+    static sa_cap_palettes named, grayed;
+    sa_cap_picture picture;
+    const uint8_t *opened;
+    const uint8_t *named_at;
+    const uint8_t *grayed_at;
+    int pictures = 0;
+    int versions = 0;
+    int draws = 0;
+
+    __wrap_frame_wait();
+    read_file();
+    while (record(SA_CAP_PICTURE, pictures)) {
+        pictures++;
+    }
+    while (record(SA_CAP_PALETTES, versions)) {
+        versions++;
+    }
+    while (record(SA_REC_DRAW, draws)) {
+        draws++;
+    }
+    memcpy(kept, sa1_live_colors, sizeof kept);
+    set = meshsets[0];
+    for (int i = 0; i < SA_PALETTE_ENTRIES; i++) {
+        sa1_live_colors[2 * i] = base;
+    }
+    reset();
+    draw_model(&sky);
+    for (int i = 0; i < SA_UNLIT_OFFSETS; i++) {
+        sa1_live_colors[UNLIT + i] = gray;
+    }
+    draw_model(&sky);
+    memcpy(sa1_live_colors, kept, sizeof kept);
+    __wrap_frame_wait();
+    read_file();
+    opened = record(SA_CAP_PICTURE, pictures);
+    named_at = record(SA_CAP_PALETTES, versions);
+    grayed_at = record(SA_CAP_PALETTES, versions + 1);
+    CHECK(opened && named_at && grayed_at && record(SA_REC_DRAW, draws + 1) &&
+          !record(SA_CAP_PALETTES, versions + 2));
+    CHECK(named_at < opened && record(SA_REC_DRAW, draws) < grayed_at &&
+          grayed_at < record(SA_REC_DRAW, draws + 1));
+    memcpy(&picture, opened, sizeof picture);
+    memcpy(&named, named_at, sizeof named);
+    memcpy(&grayed, grayed_at, sizeof grayed);
+    CHECK(picture.palettes == named.palettes &&
+          grayed.palettes > named.palettes);
+    CHECK(named.words[0] == base && named.words[UNLIT] == 0);
+    CHECK(grayed.words[0] == base && grayed.words[UNLIT] == gray);
 }
 
 /* a full draw's shade takes Ninja's lights, recorded ahead of it. each light
@@ -2675,6 +2798,7 @@ int main(int argc, char **argv)
     filter_and_adjust();
     white_after_unlit();
     palette_versions();
+    palettes_among_draws();
     full_drawer();
     drawers_out();
     camera_cuts();
@@ -2688,6 +2812,7 @@ int main(int argc, char **argv)
     stream_refused();
     stream_from_memory();
     multi_unit();
+    readout_band();
     names_at_the_bound();
     return 0;
 }

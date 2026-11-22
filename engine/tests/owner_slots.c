@@ -55,10 +55,12 @@
 #define TA_ISP_BASE 0xa05f8128U
 #define TA_ISP_CURRENT 0xa05f8138U
 
-/* INT_STATUS's bits. INT_ISP_OVERFLOW is INT_STATUS_ERROR's */
+/* INT_STATUS's bits. INT_ISP_OVERFLOW and INT_OL_OVERFLOW are
+ * INT_STATUS_ERROR's, and the second is INT_VBLANK_IN's bit there */
 #define INT_RENDER_END 0x07U
 #define INT_VBLANK_IN 0x08U
 #define INT_ISP_OVERFLOW 0x04U
+#define INT_OL_OVERFLOW 0x08U
 static const uint32_t list_ends[LISTS] = {0x80, 0x100, 0x200, 0x400, 0x200000};
 
 /* BACKGROUND_TAG's fields: the plane's skip, and its packet's offset in the
@@ -104,6 +106,8 @@ static uint32_t renders;
  * each age counts the vblanks so far */
 static int rendering;
 static int taking;
+static int hazard_resets;
+static int buffered_dma, pending_list_end, discarded, reject_request;
 static uint32_t render_age;
 static uint32_t taking_age;
 
@@ -210,6 +214,9 @@ KMINT32 kmiWriteRegister(KMDWORD reg, KMDWORD value)
     int slot;
 
     if (PVR_REGISTERS + reg == TA_ISP_BASE) {
+        if (taking || buffered_dma || pending_list_end) {
+            fail("bank opens with an old transfer or list end pending");
+        }
         for (slot = 0; slot < SLOTS; slot++) {
             KMINT32 state = DEVICE.slot_state[slot];
 
@@ -246,6 +253,14 @@ void kmiMemCopy4(void *destination, void *source, KMDWORD size)
 KMSTATUS kmiDMAtoTARequest(KMDWORD target, const KMDWORD *source, KMDWORD size,
                            KMDWORD flags, KMDWORD **handle)
 {
+    if (reject_request) {
+        if (reject_request++ != 1) {
+            fail("retried a full polygon queue after overflow");
+            return DMA_QUEUED;
+        }
+        return DMA_QUEUE_FULL;
+    }
+    buffered_dma = 1;
     (void)target;
     (void)source;
     (void)size;
@@ -259,8 +274,16 @@ KMBOOLEAN kmiExecuteDMAChain(void)
     return 0;
 }
 
+void owner_discard_lists(void)
+{
+    discarded++;
+    taking = buffered_dma = pending_list_end = 0;
+}
+
 KMINT32 kmiDMAHazardReset(void)
 {
+    hazard_resets++;
+    taking = buffered_dma = pending_list_end = 0;
     return 0;
 }
 
@@ -353,8 +376,8 @@ static void render_started(int slot)
 }
 
 /* raise one interrupt of these events and run the handler. l ends the lists
- * of the tile accelerator's slot. v is a vblank, r a render's end and o an
- * ISP overflow */
+ * of the tile accelerator's slot. v is a vblank, r a render's end, o an ISP
+ * overflow and O an object list overflow */
 static void interrupt(const char *events)
 {
     uint32_t status = 0;
@@ -363,7 +386,12 @@ static void interrupt(const char *events)
 
     for (; *events != '\0'; events++) {
         switch (*events) {
+        case 'd':
+            buffered_dma = 0;
+            pending_list_end = 1;
+            break;
         case 'l':
+            buffered_dma = pending_list_end = 0;
             reached.finished += (uint32_t)slot_waits();
             *word(TA_ISP_CURRENT) = held[DEVICE.ta_slot].end;
             for (list = 0; list < LISTS; list++) {
@@ -382,6 +410,9 @@ static void interrupt(const char *events)
             break;
         case 'o':
             error |= INT_ISP_OVERFLOW;
+            break;
+        case 'O':
+            error |= INT_OL_OVERFLOW;
             break;
         }
     }
@@ -490,7 +521,8 @@ static void set_up(const char *name, int sixty)
     first = pictures;
     renders = 0;
     rendering = 0;
-    taking = 0;
+    hazard_resets = 0;
+    taking = buffered_dma = pending_list_end = discarded = reject_request = 0;
     script = "";
     d->latency_model = KM_LATENCYMODEL_2V;
     d->vertex_buffer_model = NOBUF;
@@ -686,6 +718,57 @@ static void overflow(void)
     }
 }
 
+/* at 60 fps a flip whose slot overflows waits for a later vblank or its
+ * lists' end. neither the overflow's own interrupt, even with a vblank in it,
+ * nor an object list overflow's lets it go on. Kamui's handler takes such a
+ * vblank while the slot is still in the tile accelerator. a flip fails where
+ * it goes on ahead of its events */
+static void overflow_waits(void)
+{
+    set_up("a flip whose slot overflows waits for a vblank", 1);
+    flip(1, "oOv");
+    set_up("a flip whose slot overflows waits for its lists' end", 1);
+    flip(1, "ol");
+    set_up("a flip whose slot overflows in a vblank's interrupt waits for the "
+           "next vblank",
+           1);
+    flip(1, "(vo)v");
+    set_up("DMA finished with an old list end still pending", 1);
+    flip(1, "odv");
+    if (discarded != 1) {
+        fail("the overflowed bank was not discarded");
+    }
+    flip(1, "l");
+    set_up("discard a direct list after it overflows", 1);
+    event('o');
+    kmResetPointer();
+    if (discarded != 1) {
+        fail("reset left an overflow in the current bank");
+    }
+    flip(1, "l");
+    for (int split = 0; split <= 1; split++) {
+        set_up("a direct-list overflow with room in the DMA queue", split);
+        event('o');
+        flip(split, "v");
+        if (discarded != 1 || hazard_resets ||
+            kmiIntStatisticData.ta_timeouts) {
+            fail("direct-list overflow needed a whole-queue reset");
+        }
+    }
+    set_up("a full queue after a direct-list overflow", 1);
+    event('o');
+    reject_request = 1;
+    flip(1, "v");
+    if (reject_request != 2 || discarded != 1) {
+        fail("the full polygon queue was not discarded");
+    }
+    set_up("30 fps recovers before opening the other bank", 0);
+    flip(0, "ov");
+    if (discarded != 1) {
+        fail("30 fps kept the overflowed bank");
+    }
+}
+
 /* 60 fps ends with a picture finished and waiting for its render. the next
  * flip goes on at the vblank that starts its render, not at the first
  * render's end. the frame is Kamui's from that vblank. the flip after it has
@@ -821,6 +904,7 @@ int main(int argc, char **argv)
     late_second();
     reset();
     overflow();
+    overflow_waits();
     leaving();
     leaving_idle();
     leaving_split();

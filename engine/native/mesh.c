@@ -6,6 +6,7 @@
  * mesh.src tells that mark from a mesh by its sign, since a P1 address is
  * negative. a host's address can take either sign, so collision_mesh_free
  * compares prev with LIST_MARK itself */
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -59,6 +60,11 @@ static struct {
     struct polygon *P32 first, *P32 last;
 } buckets[BUCKETS];
 
+/* the translated floor search reads one center past its last candidate.
+ * the terminator lies beyond every finite window and owns no pool slot.
+ * last still names the last real polygon so freeing the mesh unlinks it */
+static struct polygon end_polygon = {.center = {INFINITY, INFINITY, INFINITY}};
+
 #define LIST_MARK                                                              \
     ((struct collision_mesh * P32)(uint32_t)(-(intptr_t)&collision_mesh_list))
 
@@ -90,7 +96,7 @@ struct collision_mesh *collision_mesh_alloc(void)
 {
     struct collision_mesh *mesh = free_meshes;
 
-    if (!mesh->next) {
+    if (!mesh) {
         return NULL;
     }
     free_meshes = mesh->next;
@@ -105,7 +111,8 @@ struct collision_mesh *collision_mesh_alloc(void)
 
 void collision_mesh_free(struct collision_mesh *mesh)
 {
-    if (mesh->polygons && mesh->last) {
+    /* an empty mesh's last is end_polygon, which is no pool's */
+    if (mesh->polygons && mesh->last && mesh->last != &end_polygon) {
         mesh->last->next = free_polygons;
         free_polygons = mesh->polygons;
     }
@@ -133,7 +140,7 @@ static struct polygon *take_polygon(struct polygon * P32 * first,
     }
     free_polygons = polygon->next;
     polygon->next = *first;
-    if (*first) {
+    if (*first && *first != &end_polygon) {
         (*first)->prev = polygon;
     } else {
         *last = polygon;
@@ -145,6 +152,9 @@ static struct polygon *take_polygon(struct polygon * P32 * first,
 
 struct polygon *collision_mesh_add_polygon(struct collision_mesh *mesh)
 {
+    if (!mesh->polygons) {
+        mesh->polygons = mesh->last = &end_polygon;
+    }
     return take_polygon(&mesh->polygons, &mesh->last);
 }
 
@@ -183,5 +193,10 @@ void collision_mesh_take_buckets(struct collision_mesh *mesh)
             }
         }
     }
-    mesh->last = last;
+    if (last) {
+        last->next = &end_polygon;
+        mesh->last = last;
+    } else {
+        mesh->polygons = mesh->last = &end_polygon;
+    }
 }
