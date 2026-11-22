@@ -12,9 +12,14 @@
 #include "native.h"
 
 /* P32 is marks.py's mark for a 32-bit pointer. mingw's _mingw.h defines
- * __ptr32 as nothing, hiding clang's keyword */
+ * __ptr32 as nothing, hiding clang's keyword. a 32-bit target needs no mark at
+ * all: its pointers are the SH-4's four bytes, on GCC as on clang */
 #undef __ptr32
+#if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4
+#define P32
+#else
 #define P32 __ptr32 __uptr
+#endif
 
 typedef struct {
     float x, y, z;

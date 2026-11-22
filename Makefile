@@ -156,12 +156,14 @@ DC_GOALS   := $(filter dc dc-disc dc-check dc-order build/dc/%,$(MAKECMDGOALS))
 # file under tools/sh-elf/ or tools/sh4zam/, which dc.mk alone builds or
 # fetches. A fault in dc.mk stops only a run that names one of these goals
 DC_MK_GOALS := $(strip $(DC_GOALS) $(filter tools/sh-elf/% tools/sh4zam/%,$(MAKECMDGOALS)))
-# The goals for which make reads engine/engine.mk, the engine's rules:
-# native, play, a goal named engine-*, engine-test among them, or a
-# file under build/engine/, none of which writes build/gen/. No other goal
-# reads a make file under engine/, but pc, which writes build/gen/ first, as
-# DC_GOALS do
-ENGINE_GOALS := $(filter native play engine-% build/engine/%,$(MAKECMDGOALS))
+# The goals for which make reads engine/engine.mk, the engine's rules: native,
+# play, 3ds and the goals its name starts, a goal named engine-*, engine-test
+# among them, or a file under build/engine/ or build/3ds/. None of them writes
+# build/gen/, but pc, which writes it first, as DC_GOALS do. No other goal reads
+# a make file under engine/, so make all, check, dc, dc-disc and dc-check read
+# none, and a run that names one of DC_GOALS beside a goal this file is read
+# for reads both sets of rules
+ENGINE_GOALS := $(filter native play 3ds 3ds-% devkitarm engine-% build/engine/% build/3ds/%,$(MAKECMDGOALS))
 # make accept, clean, format, help, lint, review and test compile no object,
 # so they skip tools/deps.py and the objects' .d files, and refresh no tool's
 # stamp
@@ -593,6 +595,32 @@ play:
 
 ## check the engine's C ABI, and run the engine's tests
 engine-test:
+
+# the 3DS target's goals, which engine/mk/3ds.mk gives their rules: the game's C
+# for the console's ARM11, and the probe that says what the console gives it
+## build the 3DS game's .3dsx from the disc, and the probe
+3ds:
+
+## build the 3DS game's .3dsx from the disc
+3ds-image:
+
+## lay out an SD card's tree for the 3DS game, in build/3ds/sd
+3ds-sd:
+
+## build the 3DS game as a CIA, which installs to the HOME Menu
+3ds-cia:
+
+## compile the game's C for the 3DS's ARM11, from the disc
+3ds-objects:
+
+## build the 3DS probe, an installable .3dsx that reports the console's facts
+3ds-probe:
+
+## report which sources the 3DS target compiles, and which wait on the disc
+3ds-check:
+
+## fetch devkitARM from devkitNix, and link it as tools/devkitpro
+devkitarm:
 
 # The tests run make in checkouts of their own, with this make's executable,
 # which the recipe names to them in MAKE. make runs a recipe line that names
@@ -1295,6 +1323,7 @@ build/lint/guards.ok: $(C_FILES) $(ENGINE_FILES) tools/guards.py tools/csource.p
 build/lint/format.ok build/lint/asm.ok build/lint/tags.ok build/lint/guards.ok $(TIDIED): Makefile
 
 .PHONY: all relink shift check offsets dc dc-disc dc-check dc-order native pc play engine-test accept test \
+	 3ds 3ds-image 3ds-sd 3ds-cia 3ds-objects 3ds-probe 3ds-check devkitarm \
 	 progress lint review format clean help unpack stub-bodies stub-includes \
 	FORCE
 .DELETE_ON_ERROR:

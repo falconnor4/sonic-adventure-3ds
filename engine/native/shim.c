@@ -753,6 +753,14 @@ static int32_t prs_decode(const uint8_t *from, uint8_t *dest)
 /* the bits an address shares with its mirrors: all but its top three, which
  * name the SH-4's region */
 #define MIRROR_MASK 0x1fffffffU
+/* the 3DS moves main memory to SA_3DS_RAM, which has no mirrors
+ * (engine/tools/rambase.py) */
+#ifdef SA_3DS_RAM
+#undef MODULE_AREA
+#undef MIRROR_MASK
+#define MODULE_AREA ((uint32_t)SA_3DS_RAM | 0x00900000U)
+#define MIRROR_MASK 0xffffffffU
+#endif
 
 struct advertise {
     void *start, *end, *step;
@@ -767,7 +775,11 @@ extern struct summary summary_entries __attribute__((weak));
  * src/event/play.c reads at EVENT_MODULE. once an event decodes there, the
  * shim writes over them the slice's own, as ev0001_head. Sky Chase's paths
  * load there too, and keep their bytes */
+#ifdef SA_3DS_RAM
+#define EVENT_MODULE ((uint32_t)SA_3DS_RAM | 0x00b80000U)
+#else
 #define EVENT_MODULE 0x0cb80000U
+#endif
 #define EVENT_HEAD_SIZE (2 * sizeof(void *))
 
 /* the four events the disc stores as another's bytes (tools/images.py's

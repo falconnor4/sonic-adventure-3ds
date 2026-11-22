@@ -31,6 +31,14 @@ sa_handle Client::make(uint32_t kind, uint32_t format,
     totals.created++;
     held += desc.bytes;
     totals.held_most = std::max(totals.held_most, held);
+#ifdef SA_3DS
+    /* the 3DS's backend copies a texture into the GPU's memory as it is
+     * made, and reads none of its bytes after: they go now, and the handle's
+     * retirement finds an empty loan */
+    if (kind == SA_KIND_TEXTURE) {
+        bytes = std::vector<uint8_t>();
+    }
+#endif
     lent[handle] = std::move(bytes);
     totals.lent_most =
         std::max(totals.lent_most, static_cast<uint32_t>(lent.size()));
@@ -837,7 +845,15 @@ sa_pc_client *sa_pc_client_create(sa_engine *engine, const char *const *roots)
     for (; roots != nullptr && *roots != nullptr; roots++) {
         made->disc.add_root(*roots);
     }
+#ifdef SA_3DS
+    /* the 3DS reads its SD card too slowly to index the disc as it starts:
+     * the build indexes it on the host, into the image's RomFS */
+    if (!made->pvrs.read_index("romfs:/textures.idx")) {
+        made->pvrs.index(made->disc, "SONICADV");
+    }
+#else
     made->pvrs.index(made->disc, "SONICADV");
+#endif
     return reinterpret_cast<sa_pc_client *>(made);
 }
 

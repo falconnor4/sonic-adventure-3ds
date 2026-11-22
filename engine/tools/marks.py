@@ -604,9 +604,23 @@ def preprocessed(dest, path):
     path.write_text(laid(text), errors='surrogateescape')
 
 
+def arm(path):
+    """the 3DS's pass over path, a unit's preprocessed C: what the mark pass
+    does but for the marks themselves. a pointer is 32 bits on the ARM11, so
+    no word is marked, and no static initializer's address needs a
+    constructor. the hooks, SHC's long float and the float pass's constants
+    are as on a host, and the records' sizes are held to the SH-4's"""
+    text = path.read_text(errors='surrogateescape')
+    text = rewritten(path, text, HOOKS)
+    text = in_code(text, lambda code: UNSUFFIXED.sub(r'\1F', LONG_FLOAT.sub('double', code)))
+    path.write_text(laid(text), errors='surrogateescape')
+
+
 def main():
     args = sys.argv[1:]
-    if args[0] == 'tree':
+    if args[0] == 'arm':
+        arm(Path(args[1]))
+    elif args[0] == 'tree':
         tree(Path(args[1]))
     elif args[0] == 'ninja':
         path = Path(args[1])

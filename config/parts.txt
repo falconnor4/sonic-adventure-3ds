@@ -53,6 +53,8 @@
 #   none     neither: a test's own code
 #
 # path                         thing      bin
+engine/3ds/                     backend    picture
+engine/3ds/probe.c              tool       none    # the probe reports the console's facts alone, and links no engine
 engine/dc/batch.h              backend    picture
 engine/dc/crash.c              game       picture
 engine/dc/crash.h              game       picture

@@ -13,8 +13,13 @@ namespace pc {
 
 namespace {
 
-/* the most a picture holds, past which a draw is refused */
+/* the most a picture holds, past which a draw is refused. the 3DS, whose
+ * pictures hold a few thousand triangles, keeps room for far fewer */
+#ifdef SA_3DS
+constexpr uint32_t MOST_TRIANGLES = 1U << 15;
+#else
 constexpr uint32_t MOST_TRIANGLES = 1U << 19;
+#endif
 constexpr uint32_t MOST_POINTS = 65536; /* a corner's index is 16 bits */
 constexpr uint32_t WORDS =
     SA_PALETTES * SA_PALETTE_ENTRIES * 2 + SA_UNLIT_OFFSETS;
@@ -183,7 +188,11 @@ void Scene::open(uint32_t blend)
 {
     blend_ = blend;
     vertices_.reserve(MOST_TRIANGLES * 3);
+#ifdef SA_3DS
+    batches_.reserve(1U << 13);
+#else
     batches_.reserve(1U << 16);
+#endif
     /* a picture takes at most its own view, a home, and one for each of
      * World's lenses_ */
     lenses_.reserve(2 + LENSES);
@@ -622,6 +631,9 @@ void Scene::placed(const sa_sprite &s, uint32_t texture)
             return;
         }
         state.flags |= BATCH_SCREEN;
+#ifdef SA_3DS
+        state.flags |= BATCH_FACING;
+#endif
     }
     /* the corners in the order engine/sa1/sprites.c's sprite_corners gives
      * them */

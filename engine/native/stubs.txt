@@ -25,6 +25,7 @@ _builtin_set_imask                   function     *        sets the SH-4's inter
 _BSG_END                             zeros        *        the word the start code keeps the end of bss in. sbInitSystem takes main memory's view from it, for the megabyte it hands syMallocInit, a stub too (src/system/sbinit.c)
 _ctype                               unsupported  *        SHC's table of character classes, whose source engine/mk/native.mk leaves out of the slice's runtime. Only sscanf's scanner reads it, for the events' path editor (events/shared/sdk/_fmtin.c, events/shared/path_editor.c), and takes no character for a space or a digit
 _errno                               zeros        linux    SHC's error word, which its float math and its scanner set (sdk/runtime/, events/shared/sdk/). The slice compiles no source that defines it, so it lies here
+_errno                               zeros        3ds      _errno, SHC's error word as on Linux: newlib's errno is a function's, __errno
 sa1_errno                            zeros        windows  _errno, by the name engine/mk/native.mk gives the game's on Windows, where the UCRT's _errno is a function
 # What starts and ends the console, as sbInitSystem and sbExitSystem call it (src/system/sbinit.c)
 syHwInit                             function     *        starts the console's hardware. A host has none of it to start

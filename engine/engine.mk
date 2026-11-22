@@ -128,4 +128,4 @@ unfetched = $(if $(subst $(strip $(file <$1/fetched.txt)),,$2)$(subst $2,,$(stri
 receipt   = rm -f $1/fetched.txt && sums=$$(awk '$$2 ~ "^$1/"' tools/SHA256SUMS) && \
 	{ [ -z "$$sums" ] || echo "$$sums" | sha256sum -c --quiet -; } && printf '%s\n' $(call quoted,$2) > $1/fetched.txt
 
-include engine/mk/owner.mk engine/mk/drawers.mk engine/mk/replay.mk engine/mk/native.mk
+include engine/mk/owner.mk engine/mk/drawers.mk engine/mk/replay.mk engine/mk/native.mk engine/mk/3ds.mk

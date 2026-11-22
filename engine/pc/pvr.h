@@ -57,6 +57,12 @@ public:
     bool load(const Disc &disc, uint32_t global_index, const std::string &name,
               uint32_t file, Image &image, std::string &why) const;
     uint32_t count() const { return static_cast<uint32_t>(places_.size()); }
+    /* the index as a file, which read_index takes back: a console that
+     * reads its disc slowly takes the index a host made of the same disc,
+     * as the 3DS does from its RomFS. each returns false where the file
+     * can't be written or read, and read_index then keeps no place */
+    bool write_index(const std::string &path) const;
+    bool read_index(const std::string &path);
 
 private:
     std::vector<PvrPlace> places_;

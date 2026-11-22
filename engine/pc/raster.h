@@ -41,6 +41,9 @@ constexpr uint32_t BATCH_COLLECT = 128;
 /* the batch clips at the picture's near_z, as Ninja's full drawer does.
  * other batches clip at z = 1 */
 constexpr uint32_t BATCH_NEAR = 256;
+/* the 3DS's: a facing sprite in the world, which the scene places in
+ * pixels as it does the screen's own draws */
+constexpr uint32_t BATCH_FACING = 512;
 
 /* how a batch samples its texture. the low two bits hold an SA_FILTER_
  * value. SAMPLE_ADJUST holds the mipmap's D adjust as a material's mip_bias

@@ -10,6 +10,7 @@
 #include "sound.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -284,7 +285,13 @@ bool Sound::create()
     bytes_ = static_cast<uint8_t *>(malloc(SOUND_BYTES));
     queue_ = static_cast<Entry *>(calloc(QUEUE, sizeof(Entry)));
     for (Stream &s : streams_) {
+#ifdef SA_3DS
+        s.data = static_cast<uint8_t *>(malloc(STREAM_WINDOW));
+        s.file = nullptr;
+        s.room = STREAM_WINDOW;
+#else
         s.data = static_cast<uint8_t *>(malloc(STREAM_BYTES));
+#endif
         s.gain = 1;
     }
     for (float &gain : port_gain_) {
@@ -314,9 +321,49 @@ void Sound::destroy()
     memory_ = bytes_ = nullptr;
     queue_ = nullptr;
     for (Stream &s : streams_) {
+        stream_close(s);
         free(s.data);
         s.data = nullptr;
     }
+}
+
+void Sound::stream_close(Stream &s)
+{
+#ifdef SA_3DS
+    if (s.file != nullptr) {
+        fclose(static_cast<FILE *>(s.file));
+        s.file = nullptr;
+    }
+    s.window_at = 0;
+    s.window_bytes = 0;
+#else
+    (void)s;
+#endif
+}
+
+const uint8_t *Sound::stream_at(Stream &s, uint32_t at, uint32_t n)
+{
+    if (at + n > s.bytes) {
+        return nullptr;
+    }
+#ifdef SA_3DS
+    if (s.file != nullptr &&
+        (at < s.window_at || at + n > s.window_at + s.window_bytes)) {
+        FILE *file = static_cast<FILE *>(s.file);
+
+        s.window_at = at;
+        s.window_bytes = 0;
+        if (fseek(file, static_cast<long>(s.base + at), SEEK_SET) == 0) {
+            s.window_bytes = static_cast<uint32_t>(fread(s.data, 1, STREAM_WINDOW, file));
+        }
+        if (n > s.window_bytes) {
+            return nullptr;
+        }
+    }
+    return s.data + (at - s.window_at);
+#else
+    return s.data + at;
+#endif
 }
 
 bool Sound::push(const Entry &entry, const void *data, uint32_t bytes)
@@ -410,6 +457,31 @@ sa_result Sound::stream(uint32_t index, const void *data, uint32_t bytes)
     return push(entry, data, bytes) ? SA_OK : SA_ERR_FULL;
 }
 
+#ifdef SA_3DS
+sa_result Sound::stream_file(uint32_t index, void *file, uint32_t base,
+                             uint32_t bytes)
+{
+    Entry entry{};
+
+    if (index >= STREAMS || file == nullptr) {
+        if (file != nullptr) {
+            fclose(static_cast<FILE *>(file));
+        }
+        return SA_ERR_INVALID;
+    }
+    entry.what = ENTRY_STREAM;
+    entry.stream = index;
+    entry.file = file;
+    entry.file_base = base;
+    entry.file_bytes = bytes;
+    if (!push(entry, nullptr, 0)) {
+        fclose(static_cast<FILE *>(file));
+        return SA_ERR_FULL;
+    }
+    return SA_OK;
+}
+#endif
+
 sa_pc_sound_stats Sound::stats() const
 {
     sa_pc_sound_stats s{};
@@ -456,6 +528,24 @@ void Sound::drain()
                 fx_outputs_ = Place{e.bank.address, bytes};
             }
         } else if (e.what == ENTRY_STREAM) {
+#ifdef SA_3DS
+            /* a file's stream takes the file, and reads its header first */
+            Stream &s = streams_[e.stream];
+
+            stream_close(s);
+            if (e.file != nullptr) {
+                s.file = e.file;
+                s.base = e.file_base;
+                s.bytes = e.file_bytes;
+                const uint8_t *head = stream_at(s, 0, 0x2c);
+
+                start_stream(e.stream, head, head ? e.file_bytes : 0);
+                if (!s.playing) {
+                    stream_close(s);
+                }
+                continue;
+            }
+#endif
             start_stream(e.stream, e.end ? data : nullptr, e.end ? bytes : 0);
         } else {
             const sa_audio_command &c = e.command;
@@ -1047,7 +1137,24 @@ void Sound::start_stream(uint32_t index, const uint8_t *data, uint32_t bytes)
         data[5] != ADX_BLOCK || data[7] < 1 || data[7] > STREAM_CHANNELS) {
         return;
     }
+#ifdef SA_3DS
+    if (s.file == nullptr) {
+        /* bytes given whole play from data, which grows to hold them */
+        stream_close(s);
+        if (bytes > s.room) {
+            auto *more = static_cast<uint8_t *>(realloc(s.data, bytes));
+
+            if (more == nullptr) {
+                return;
+            }
+            s.data = more;
+            s.room = bytes;
+        }
+        memcpy(s.data, data, bytes);
+    }
+#else
     memcpy(s.data, data, bytes);
+#endif
     s.bytes = bytes;
     s.offset = big16(data + 2) + 4;
     s.channels = data[7];
@@ -1104,13 +1211,15 @@ bool Sound::stream_decode(Stream &s)
 
         /* a scale with its top bit set ends the data, as adx_dcda.c's
          * SCALE_END does */
-        if (at + ADX_BLOCK > s.bytes || (s.data[at] & 0x80)) {
+        const uint8_t *code_at = stream_at(s, at, ADX_BLOCK);
+
+        if (code_at == nullptr || (code_at[0] & 0x80)) {
             return false;
         }
-        int32_t gain = static_cast<int32_t>(big16(s.data + at) & 0x1fff) + 1;
+        int32_t gain = static_cast<int32_t>(big16(code_at) & 0x1fff) + 1;
 
         for (uint32_t i = 0; i < ADX_CODES; i++) {
-            int8_t byte = static_cast<int8_t>(s.data[at + 2 + i / 2]);
+            int8_t byte = static_cast<int8_t>(code_at[2 + i / 2]);
             int32_t code = i & 1 ? ADX_STEP[byte & 15] : byte >> 4;
             int32_t x =
                 clamp16(gain * code + ((s.k0 * newer + s.k1 * older) >> 12));
