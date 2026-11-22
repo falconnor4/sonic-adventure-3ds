@@ -46,6 +46,8 @@ extern "C" LightLock sa3ds_engine_lock;
 /* the game's mode, src/main.h's enum game_mode: 4 and 5 are play in a stage
  * or a field, and 9 a stage the menus picked */
 extern "C" int game_mode;
+/* settings.txt's "aa 0" draws the top screen without its supersampling */
+extern "C" int sa3ds_antialias;
 
 namespace {
 
@@ -58,6 +60,14 @@ constexpr uint32_t DISPLAY_FLAGS =
     GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
     GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
     GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
+/* the top screen's antialiasing: each eye's picture drawn twice as fine
+ * across the framebuffer's 240, the screen's height, and the display
+ * transfer's 2x1 scaling averaging each two pixels into one as it copies the
+ * picture to the screen. 2x2 would take some 6 MB of VRAM for the two eyes'
+ * colors and depths, all there is; 2x1 takes 3 */
+constexpr int AA_SCALE = 2;
+constexpr uint32_t AA_DISPLAY_FLAGS =
+    (DISPLAY_FLAGS & ~GX_TRANSFER_SCALING(3)) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_X);
 /* the corners a picture may send the GPU */
 constexpr uint32_t MOST_CORNERS = 3U << 15;
 constexpr uint32_t NO_VIEW = UINT32_MAX;
@@ -656,12 +666,35 @@ sa_result sa::backend_create(sa_engine &engine)
         return SA_ERR_UNSUPPORTED;
     }
     b->gpu = true;
-    b->target = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGBA8,
-                                       GPU_RB_DEPTH24_STENCIL8);
-    C3D_RenderTargetSetOutput(b->target, GFX_TOP, GFX_LEFT, DISPLAY_FLAGS);
-    b->right = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGBA8,
-                                      GPU_RB_DEPTH24_STENCIL8);
-    C3D_RenderTargetSetOutput(b->right, GFX_TOP, GFX_RIGHT, DISPLAY_FLAGS);
+    /* the eyes' targets, supersampled where VRAM holds both at their size,
+     * and else at the screen's own */
+    if (sa3ds_antialias) {
+        b->target = C3D_RenderTargetCreate(SCREEN_H * AA_SCALE, SCREEN_W, GPU_RB_RGBA8,
+                                           GPU_RB_DEPTH24_STENCIL8);
+        b->right = C3D_RenderTargetCreate(SCREEN_H * AA_SCALE, SCREEN_W, GPU_RB_RGBA8,
+                                          GPU_RB_DEPTH24_STENCIL8);
+        if (b->target == nullptr || b->right == nullptr) {
+            if (b->target != nullptr) {
+                C3D_RenderTargetDelete(b->target);
+            }
+            if (b->right != nullptr) {
+                C3D_RenderTargetDelete(b->right);
+            }
+            b->target = b->right = nullptr;
+        }
+    }
+    uint32_t top_flags = b->target != nullptr ? AA_DISPLAY_FLAGS : DISPLAY_FLAGS;
+
+    if (b->target == nullptr) {
+        b->target = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGBA8,
+                                           GPU_RB_DEPTH24_STENCIL8);
+        b->right = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGBA8,
+                                          GPU_RB_DEPTH24_STENCIL8);
+    }
+    fprintf(stderr, "engine: the top screen %s\n",
+            top_flags == AA_DISPLAY_FLAGS ? "supersampled 2x1" : "without antialiasing");
+    C3D_RenderTargetSetOutput(b->target, GFX_TOP, GFX_LEFT, top_flags);
+    C3D_RenderTargetSetOutput(b->right, GFX_TOP, GFX_RIGHT, top_flags);
     gfxSet3D(true);
     b->bottom = C3D_RenderTargetCreate(BOTTOM_H, BOTTOM_W, GPU_RB_RGBA8,
                                        GPU_RB_DEPTH24_STENCIL8);

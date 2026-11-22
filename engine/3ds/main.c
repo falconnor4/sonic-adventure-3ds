@@ -357,6 +357,10 @@ static void read_settings(void)
             if (sscanf(line, "shots %*d %d", &from) == 1 && from > 0) {
                 shot_from = (unsigned long)from;
             }
+        } else if (sscanf(line, "aa %d", &n) == 1) {
+            extern int sa3ds_antialias;
+
+            sa3ds_antialias = n != 0;
         } else if (sscanf(line, "thread %d", &n) == 1) {
             extern int sa3ds_drawing_thread;
 

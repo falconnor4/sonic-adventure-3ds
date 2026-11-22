@@ -55,6 +55,9 @@ static volatile int drawing_quit, quit_asked;
  * whole core the game's thread leaves free, and Azahar, which runs that core
  * far slower than the first, draws on the game's thread */
 int sa3ds_drawing_thread = -1;
+/* the top screen's 2x1 supersampling (backend.cpp), which settings.txt's
+ * "aa 0" turns off */
+int sa3ds_antialias = 1;
 
 /* Azahar's and Citra's own system information, which a console has none of */
 static int emulated(void)
