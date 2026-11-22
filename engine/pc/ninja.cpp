@@ -26,7 +26,12 @@ uint32_t ninja_scaled(uint32_t argb, float intensity)
     uint32_t out = argb & 0xff000000;
 
     for (uint32_t shift = 0; shift < 24; shift += 8) {
-        out |= ((argb >> shift & 0xff) * scale / 255) << shift;
+        /* v / 255 for v below 65536, exactly, by shifts: a host with no
+         * divide, as the 3DS's ARM11, would call a routine three times a
+         * point */
+        uint32_t v = (argb >> shift & 0xff) * scale;
+
+        out |= ((v + 1 + (v >> 8)) >> 8) << shift;
     }
     return out;
 }

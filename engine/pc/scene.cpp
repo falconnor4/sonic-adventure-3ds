@@ -197,6 +197,7 @@ void Scene::open(uint32_t blend)
      * World's lenses_ */
     lenses_.reserve(2 + LENSES);
     blend_list_.reserve(MOST_TRIANGLES);
+    blend_keys_.reserve(MOST_TRIANGLES);
     world_.resize(MOST_POINTS * 3);
     base_.resize(MOST_POINTS);
     offset_.resize(MOST_POINTS);
@@ -861,25 +862,44 @@ void Scene::finish()
 {
     /* the PowerVR's lists in order: opaque, then blend. a host's sort goes
      * from the farthest, and keeps the draws' order in a tie */
-    if (blend_ != SA_PC_BLEND_PIXEL) {
-        bool by_draw = blend_ == SA_PC_BLEND_DRAW;
-        bool by_own = blend_ == SA_PC_BLEND_TRIANGLE;
-
-        std::stable_sort(
-            blend_list_.begin(), blend_list_.end(),
-            [by_draw, by_own](const BlendTriangle &a, const BlendTriangle &b) {
-                if (a.screen != b.screen) {
-                    return b.screen;
-                }
-                if (a.screen) {
-                    return a.own_z > b.own_z;
-                }
-                return by_draw  ? a.draw_z > b.draw_z
-                       : by_own ? a.own_z > b.own_z
-                                : false;
-            });
+    if (blend_ == SA_PC_BLEND_PIXEL) {
+        for (const BlendTriangle &t : blend_list_) {
+            add(vertices_, batches_, t.state, t.corners, 3);
+        }
+        blend_list_.clear();
+        return;
     }
-    for (const BlendTriangle &t : blend_list_) {
+    bool by_draw = blend_ == SA_PC_BLEND_DRAW;
+    bool by_own = blend_ == SA_PC_BLEND_TRIANGLE;
+
+    /* each triangle's key: a screen's triangle sorts by its own z, and
+     * another by its draw's or its own as the blend says, or keeps its
+     * place. a tie keeps the draws' order, the triangle's place deciding, as
+     * a stable sort of the triangles does */
+    blend_keys_.resize(blend_list_.size());
+    for (uint32_t i = 0; i < blend_list_.size(); i++) {
+        const BlendTriangle &t = blend_list_[i];
+        float z = t.screen ? t.own_z : by_draw ? t.draw_z : by_own ? t.own_z : 0.0F;
+
+        /* a z that is no number would leave the order no order at all */
+        blend_keys_[i] = BlendKey{z == z ? z : -INFINITY, i, t.screen};
+    }
+    std::sort(blend_keys_.begin(), blend_keys_.end(),
+              [](const BlendKey &a, const BlendKey &b) {
+                  if (a.screen != b.screen) {
+                      return b.screen;
+                  }
+                  if (a.z > b.z) {
+                      return true;
+                  }
+                  if (b.z > a.z) {
+                      return false;
+                  }
+                  return a.at < b.at;
+              });
+    for (const BlendKey &k : blend_keys_) {
+        const BlendTriangle &t = blend_list_[k.at];
+
         add(vertices_, batches_, t.state, t.corners, 3);
     }
     blend_list_.clear();

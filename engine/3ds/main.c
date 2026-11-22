@@ -188,14 +188,16 @@ void native_vsync(void)
                    sa3ds_drawing_thread ? " (the drawing on the third core)" : "");
         {
             /* the GPU's submission by part (backend.cpp) */
-            extern uint64_t sa3ds_ticks_begin, sa3ds_ticks_parts[5];
+            extern uint64_t sa3ds_ticks_begin, sa3ds_ticks_parts[5], sa3ds_ticks_meshes;
 
-            native_log("sa3ds: of which C3D_FrameBegin %.2f, the scene's end %.2f, placing the "
-                       "corners %.2f, flushing them %.2f, the batches %.2f, C3D_FrameEnd %.2f",
-                       sa3ds_ticks_begin * ms, sa3ds_ticks_parts[0] * ms,
+            native_log("sa3ds: of which the meshes' points %.2f; C3D_FrameBegin %.2f, the scene's "
+                       "end %.2f, placing the corners %.2f, flushing them %.2f, the batches %.2f, "
+                       "C3D_FrameEnd %.2f",
+                       sa3ds_ticks_meshes * ms, sa3ds_ticks_begin * ms, sa3ds_ticks_parts[0] * ms,
                        sa3ds_ticks_parts[1] * ms, sa3ds_ticks_parts[2] * ms,
                        sa3ds_ticks_parts[3] * ms, sa3ds_ticks_parts[4] * ms);
             sa3ds_ticks_begin = 0;
+            sa3ds_ticks_meshes = 0;
             memset(sa3ds_ticks_parts, 0, sizeof sa3ds_ticks_parts);
         }
         {

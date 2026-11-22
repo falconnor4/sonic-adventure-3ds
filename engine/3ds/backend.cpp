@@ -56,6 +56,9 @@ extern "C" volatile uint64_t sa3ds_ticks_audio;
  * cache's flush of them, the batches' state and draws, and C3D_FrameEnd */
 extern "C" uint64_t sa3ds_ticks_parts[5];
 uint64_t sa3ds_ticks_parts[5];
+/* the scene's work on the meshes' points, among the records' time (main.c) */
+extern "C" uint64_t sa3ds_ticks_meshes;
+uint64_t sa3ds_ticks_meshes;
 volatile uint64_t sa3ds_ticks_audio;
 extern "C" int sa3ds_drawing_thread;
 /* the lock the drawing's thread holds, which a storage call from the game's
@@ -414,8 +417,10 @@ inline void place(const pc::Vertex &v, bool screen, const float *view,
 {
     if (screen) {
         float z = v.at[2] > NEAR ? v.at[2] : NEAR;
-        float px = v.at[0] / 320.0F - 1.0F;
-        float py = 1.0F - v.at[1] / 240.0F;
+        /* products by the reciprocals, where the VFP's divide takes many
+         * times as long, each point of each picture */
+        float px = v.at[0] * (1.0F / 320.0F) - 1.0F;
+        float py = 1.0F - v.at[1] * (1.0F / 240.0F);
 
         out.at[0] = py;
         out.at[1] = -px;
@@ -429,8 +434,8 @@ inline void place(const pc::Vertex &v, bool screen, const float *view,
         float sxw = lens.focal[0] * x + lens.center[0] * z;
         float syw = lens.focal[1] * y + lens.center[1] * z;
 
-        out.at[0] = z - syw / 240.0F;
-        out.at[1] = z - sxw / 320.0F;
+        out.at[0] = z - syw * (1.0F / 240.0F);
+        out.at[1] = z - sxw * (1.0F / 320.0F);
         out.at[2] = -NEAR;
         out.at[3] = z;
     }
@@ -1530,7 +1535,10 @@ sa_result sa_present_draw(sa_engine *engine, const sa_draw *draws, uint32_t coun
         }
         uint32_t view = take_view(b, d.view);
 
+        uint64_t drawn = svcGetSystemTick();
+
         b.scene.draw(d, mesh, m->materials, textures, *shade, lights, view);
+        sa3ds_ticks_meshes += svcGetSystemTick() - drawn;
     }
     return SA_OK;
 }

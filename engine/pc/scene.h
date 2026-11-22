@@ -152,6 +152,15 @@ private:
     std::vector<Vertex> vertices_;
     std::vector<Batch> batches_;
     std::vector<BlendTriangle> blend_list_;
+    /* the blend list's sort keys, one a triangle: finish sorts these, where
+     * a sort of the triangles themselves moved some 130 bytes each, many
+     * times over, and took a 3DS a third of its drawing */
+    struct BlendKey {
+        float z;
+        uint32_t at; /* the triangle's place in blend_list_, and its order */
+        bool screen;
+    };
+    std::vector<BlendKey> blend_keys_;
     /* a draw's points as placed() places and lights them. these keep their
      * room from draw to draw */
     std::vector<float> world_;
