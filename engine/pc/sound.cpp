@@ -529,7 +529,9 @@ void Sound::drain()
             }
         } else if (e.what == ENTRY_STREAM) {
 #ifdef SA_3DS
-            /* a file's stream takes the file, and reads its header first */
+            /* a file's stream takes the file, and reads its header first.
+             * the entry ends as any other, so the queue's head passes it: a
+             * second take of it would close the file the stream reads */
             Stream &s = streams_[e.stream];
 
             stream_close(s);
@@ -543,8 +545,7 @@ void Sound::drain()
                 if (!s.playing) {
                     stream_close(s);
                 }
-                continue;
-            }
+            } else
 #endif
             start_stream(e.stream, e.end ? data : nullptr, e.end ? bytes : 0);
         } else {

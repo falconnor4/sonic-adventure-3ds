@@ -261,10 +261,15 @@ $(3DS_ANCHORS): $(NATIVE_ANCHORS) | $(3DS_DIR)
 $(3DS_PROGRAMS:%=$(3DS_DIR)/program-%.r): $(3DS_DIR)/program-%.r: $(3DS_OBJ) $(3DS_ANCHORS)
 	@$(call status,link,$@)
 	$(Q)$(TARGET_CC) $(3DS_ARCH) -r -nostdlib -Wl,-d $(call 3ds_anchors,$*) -o $@ $(call 3ds_program_obj,$*)
+# the engine's C reads some of a program's names as the PC's does, the shim
+# summary_entries by a weak reference, so programs.py reads its objects too:
+# a name a program keeps local, the engine's reference finds none of, and the
+# story menu ran the disc's SH-4 entry as its own
+3DS_ENGINE_C_OBJ = $(3DS_ENGINE_C:%.c=$(3DS_DIR)/obj/%.o)
 $(3DS_DIR)/programs.c: engine/tools/programs.py config/imports.txt config/1st_read/imports.txt $(NATIVE_MEMORY) \
-		$(3DS_REST_OBJ) $(3DS_PROGRAMS:%=$(3DS_DIR)/program-%.r)
+		$(3DS_REST_OBJ) $(3DS_ENGINE_C_OBJ) $(3DS_PROGRAMS:%=$(3DS_DIR)/program-%.r)
 	@$(call status,programs,$@)
-	$(Q)NM=$(3DS_NM) python3 engine/tools/programs.py $(3DS_DIR) $(3DS_PROGRAMS) -- $(3DS_REST_OBJ)
+	$(Q)NM=$(3DS_NM) python3 engine/tools/programs.py $(3DS_DIR) $(3DS_PROGRAMS) -- $(3DS_REST_OBJ) $(3DS_ENGINE_C_OBJ)
 $(3DS_PROGRAMS:%=$(3DS_DIR)/program-%.o): $(3DS_DIR)/program-%.o: $(3DS_DIR)/program-%.r $(3DS_DIR)/programs.c
 	$(Q)$(3DS_OBJCOPY) --redefine-syms=$(3DS_DIR)/rename-$*.txt --keep-global-symbols=$(3DS_DIR)/keep-$*.txt \
 		--rename-section .data=sa1_data_$* --rename-section .bss=sa1_bss_$* $< $@
