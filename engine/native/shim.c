@@ -820,11 +820,22 @@ static void write_event_head(void *dest, const char *file)
     }
 }
 
+#ifdef SA_3DS
+#include "load_stats.h"
+#endif
+
 int32_t prs_decompress(void *source, void *dest)
 {
+#ifdef SA_3DS
+    uint64_t began = sa3ds_tick();
+#endif
     int32_t size = prs_decode(source, dest);
     const char *file = program_of(native_last_opened);
 
+#ifdef SA_3DS
+    sa3ds_load.prs += sa3ds_tick() - began;
+    sa3ds_load.decoded++;
+#endif
     decoded_at = dest;
     decoded_file = native_disc_file_id(native_last_opened);
     native_program_read(file);

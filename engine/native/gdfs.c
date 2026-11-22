@@ -19,6 +19,12 @@
 
 #include "native.h"
 #include "sa_engine.h"
+#ifdef SA_3DS
+#include "load_stats.h"
+#define LOAD_TICK() sa3ds_tick()
+#else
+#define LOAD_TICK() 0
+#endif
 
 #define GDD_ERR_OK 0
 #define GDD_ERR_NOTFOUND (-8)
@@ -59,25 +65,84 @@ static char failing[64];
 
 /* name's entry in the host's directory folder, as the disc spells it, in
  * out */
-static int entry_nocase(const char *folder, const char *name, char *out,
-                        size_t size)
+/* each folder's names, read once and sorted without case, so a name is a
+ * binary search away. the disc doesn't change while the game runs. a scan of
+ * the folder at each open, which this replaced, took a 3DS some 280 ms in
+ * SONICADV's thousands of names, three quarters of every load */
+struct folder_names {
+    char *folder;
+    char **names;
+    size_t count;
+};
+static struct folder_names *folders;
+static size_t folders_held;
+
+static int name_order(const void *a, const void *b)
 {
+    return strcasecmp(*(char *const *)a, *(char *const *)b);
+}
+
+static const struct folder_names *folder_read(const char *folder)
+{
+    struct folder_names *more, *f;
     DIR *dir;
     struct dirent *entry;
-    int found = 0;
+    size_t room = 0;
 
-    if (!(dir = opendir(folder))) {
-        return 0;
+    for (size_t i = 0; i < folders_held; i++) {
+        if (!strcmp(folders[i].folder, folder)) {
+            return &folders[i];
+        }
     }
+    if (!(dir = opendir(folder))) {
+        return NULL;
+    }
+    if (!(more = realloc(folders, (folders_held + 1) * sizeof *folders))) {
+        closedir(dir);
+        return NULL;
+    }
+    folders = more;
+    f = &folders[folders_held];
+    f->folder = strdup(folder);
+    f->names = NULL;
+    f->count = 0;
     while ((entry = readdir(dir))) {
-        if (!strcasecmp(entry->d_name, name)) {
-            snprintf(out, size, "%s/%s", folder, entry->d_name);
-            found = 1;
-            break;
+        if (f->count == room) {
+            char **grown = realloc(f->names, (room ? room * 2 : 256) * sizeof *f->names);
+
+            if (!grown) {
+                break;
+            }
+            f->names = grown;
+            room = room ? room * 2 : 256;
+        }
+        if ((f->names[f->count] = strdup(entry->d_name))) {
+            f->count++;
         }
     }
     closedir(dir);
-    return found;
+    if (f->count) {
+        qsort(f->names, f->count, sizeof *f->names, name_order);
+    }
+    folders_held++;
+    return f;
+}
+
+static int entry_nocase(const char *folder, const char *name, char *out,
+                        size_t size)
+{
+    const struct folder_names *f = folder_read(folder);
+    char *const *found;
+
+    if (!f || !f->count) {
+        return 0;
+    }
+    found = bsearch(&name, f->names, f->count, sizeof *f->names, name_order);
+    if (!found) {
+        return 0;
+    }
+    snprintf(out, size, "%s/%s", folder, *found);
+    return 1;
 }
 
 /* name's entry in the current directory, as the disc spells it, in out */
@@ -378,7 +443,19 @@ struct gdfs *gdFsOpen(const char *name, void *dirrec)
 
     (void)dirrec;
     snprintf(native_last_opened, sizeof native_last_opened, "%s", name);
-    if (!find_nocase(name, path, sizeof path) || !(file = fopen(path, "rb"))) {
+    uint64_t began = LOAD_TICK();
+    int found = find_nocase(name, path, sizeof path);
+    uint64_t looked = LOAD_TICK();
+
+    file = found ? fopen(path, "rb") : NULL;
+#ifdef SA_3DS
+    sa3ds_load.find += looked - began;
+    sa3ds_load.open += LOAD_TICK() - looked;
+    sa3ds_load.opens++;
+#else
+    (void)began, (void)looked;
+#endif
+    if (!file) {
         fprintf(stderr, "sa1: no file %s on the disc\n", name);
         return NULL;
     }
@@ -476,12 +553,21 @@ int32_t gdFsRead(struct gdfs *gdfs, int32_t sectors, void *buffer)
     if (held > bytes) {
         held = bytes;
     }
+    uint64_t began = LOAD_TICK();
+
     if (fseek(gdfs->file, (long)from, SEEK_SET) != 0) {
         why = strerror(errno);
     } else if (fread(buffer, 1, held, gdfs->file) != held) {
         why = ferror(gdfs->file) ? strerror(errno)
                                  : "it ends before the size it opened with";
     }
+#ifdef SA_3DS
+    sa3ds_load.read += LOAD_TICK() - began;
+    sa3ds_load.bytes += held;
+    sa3ds_load.reads++;
+#else
+    (void)began;
+#endif
     if (why) {
         if (strcasecmp(failing, gdfs->name) != 0) {
             cant_read(gdfs->name, why);

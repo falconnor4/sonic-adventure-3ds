@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -70,6 +71,12 @@ public:
 
 private:
     std::vector<PvrPlace> places_;
+    /* each global index's places and each name's, in places_'s order, made
+     * at the first find after the places change: find takes them in place of
+     * a walk of every place, which cost a 3DS some 1.5 ms a texture */
+    mutable std::unordered_map<uint32_t, std::vector<uint32_t>> by_index_;
+    mutable std::unordered_map<std::string, std::vector<uint32_t>> by_name_;
+    mutable size_t indexed_ = 0;
     /* the files last used, decompressed and the latest first, up to
      * pvr.cpp's MOST_READ. a PVM's textures load one by one, and a
      * texlist's may take turns between files. each file is read once while

@@ -9,6 +9,7 @@
 #include "basic.h"
 #include "png.h"
 #ifdef SA_3DS
+#include "load_stats.h"
 #include "texels.h"
 
 /* a texture's load's step, which the 3DS's watchdog reports (front.c) */
@@ -187,8 +188,12 @@ sa_handle Client::texture(uint32_t id)
     /* a texture of the disc's index comes ready from the pack: no PVM to
      * read and decompress, no PVR to decode and no texels to convert */
     if (!t.tried && t.texels.empty() && gpu_pack != nullptr) {
+        uint64_t began = sa3ds_tick();
+
         t.handle = packed_texture(pvrs.find(t.global_index, t.name, t.file));
         t.tried = t.handle != SA_NULL;
+        sa3ds_load.textures += sa3ds_tick() - began;
+        sa3ds_load.textures_made++;
     }
 #endif
     if (!t.tried) {
@@ -860,15 +865,29 @@ sa_handle Client::packed_texture(int place)
         gpu_bytes[place] < sizeof(sa_gpu_texels)) {
         return SA_NULL;
     }
-    std::vector<uint8_t> bytes(gpu_bytes[place]);
+    constexpr uint32_t WINDOW = 512U << 10;
+    const uint32_t at = gpu_offsets[place], size = gpu_bytes[place];
 
     sa3ds_texture_step = 1;
-    if (fseek(gpu_pack, static_cast<long>(gpu_offsets[place]), SEEK_SET) != 0 ||
-        fread(bytes.data(), 1, bytes.size(), gpu_pack) != bytes.size()) {
-        failures["can't read a texture from textures.gpu"]++;
-        sa3ds_texture_step = 0;
-        return SA_NULL;
+    if (at < gpu_window_at || at + size > gpu_window_at + gpu_window.size()) {
+        gpu_window.resize(std::max(WINDOW, size));
+        gpu_window_at = at;
+        size_t got = 0;
+
+        if (fseek(gpu_pack, static_cast<long>(at), SEEK_SET) == 0) {
+            got = fread(gpu_window.data(), 1, gpu_window.size(), gpu_pack);
+        }
+        /* the pack's end shortens the window, and a short read empties it */
+        gpu_window.resize(got);
+        if (got < size) {
+            gpu_window.clear();
+            failures["can't read a texture from textures.gpu"]++;
+            sa3ds_texture_step = 0;
+            return SA_NULL;
+        }
     }
+    std::vector<uint8_t> bytes(gpu_window.begin() + (at - gpu_window_at),
+                               gpu_window.begin() + (at - gpu_window_at) + size);
     sa3ds_texture_step = 2;
     sa_handle made = make(SA_KIND_TEXTURE, SA_FORMAT_GPU, std::move(bytes));
 

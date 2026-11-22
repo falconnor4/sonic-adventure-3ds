@@ -212,6 +212,12 @@ void native_vsync(void)
             sa3ds_ticks_audio = 0;
             sa3ds_mix_frames = sa3ds_mix_voices = sa3ds_mix_steps = 0;
         }
+        {
+            /* what loaded among the vsyncs of these ten seconds */
+            extern void sa3ds_load_report(const char *what, uint64_t span);
+
+            sa3ds_load_report("loads among the vsyncs of", sa3ds_ticks_all);
+        }
             sa3ds_ticks_begin = 0;
         }
         sa3ds_ticks_give = sa3ds_ticks_render = sa3ds_ticks_wait = 0;

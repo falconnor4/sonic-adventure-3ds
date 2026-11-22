@@ -12,6 +12,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "load_stats.h"
 #include "native.h"
 
 void native_log(const char *format, ...);
@@ -38,15 +39,19 @@ static void read_data(const struct native_program *p)
     if (!size) {
         return;
     }
+    uint64_t began = sa3ds_tick();
+
     if (!(in = fopen(path, "rb"))) {
         native_log("sa1: no %s for %s", path, p->file);
         return;
     }
+    sa3ds_load.program_bytes += size;
     if (fread(p->data, 1, size, in) != size) {
         native_log("sa1: %s holds less than %s's %lu bytes", path, p->file,
                    (unsigned long)size);
     }
     fclose(in);
+    sa3ds_load.program += sa3ds_tick() - began;
 }
 
 void native_program_read(const char *file)

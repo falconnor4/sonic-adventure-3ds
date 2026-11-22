@@ -506,12 +506,29 @@ bool Textures::read_index(const std::string &path)
 int Textures::find(uint32_t global_index, const std::string &name,
                    uint32_t file) const
 {
+    if (indexed_ != places_.size()) {
+        by_index_.clear();
+        by_name_.clear();
+        for (uint32_t i = 0; i < places_.size(); i++) {
+            by_index_[places_[i].global_index].push_back(i);
+            by_name_[places_[i].name].push_back(i);
+        }
+        indexed_ = places_.size();
+    }
+    static const std::vector<uint32_t> none;
+    auto named = by_name_.find(name);
+    const std::vector<uint32_t> &with_name = named == by_name_.end() ? none : named->second;
+    auto indexed = by_index_.find(global_index);
+    const std::vector<uint32_t> &with_index =
+        global_index == 0 ? with_name : indexed == by_index_.end() ? none : indexed->second;
     const PvrPlace *found = nullptr;
 
-    for (const PvrPlace &place : places_) {
-        if ((file != 0 && place.file != file) ||
-            (global_index == 0 ? place.name != name
-                               : place.global_index != global_index)) {
+    /* the places of the index, or of the name where the index is 0, in
+     * order: the first, or the first whose name is the name too */
+    for (uint32_t i : with_index) {
+        const PvrPlace &place = places_[i];
+
+        if (file != 0 && place.file != file) {
             continue;
         }
         if (found == nullptr || (place.name == name && found->name != name)) {
@@ -520,9 +537,10 @@ int Textures::find(uint32_t global_index, const std::string &name,
     }
     /* where the index finds none, as for an index a texlist gave a lone PVR,
      * the name decides */
-    for (const PvrPlace &place : places_) {
-        if (found == nullptr && !name.empty() && place.name == name &&
-            (file == 0 || place.file == file)) {
+    for (uint32_t i : with_name) {
+        const PvrPlace &place = places_[i];
+
+        if (found == nullptr && !name.empty() && (file == 0 || place.file == file)) {
             found = &place;
         }
     }

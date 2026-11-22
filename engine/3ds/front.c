@@ -17,6 +17,7 @@
 
 #include <3ds.h>
 
+#include "load_stats.h"
 #include "native.h"
 #include "sa_capture.h"
 #include "sa_client.h"
@@ -214,10 +215,46 @@ static void open_drawing(void)
 
 /* a vsync: the home menu and the power button get their turn, and the game's
  * clock waits for its time */
+struct sa3ds_load sa3ds_load;
+
+uint64_t sa3ds_tick(void)
+{
+    return svcGetSystemTick();
+}
+
+/* a load's time, by where it went: a gap of LOAD_GAP or more between vsyncs
+ * is a load, and its figures go to the log as the vsyncs come back */
+#define LOAD_GAP (SYSCLOCK_ARM11 / 1)
+
+extern int game_mode;
+
+/* the figures since the last report, under what, over seconds, where any
+ * file opened or texture loaded, and then none */
+void sa3ds_load_report(const char *what, uint64_t span)
+{
+    const double ms = 1000.0 / SYSCLOCK_ARM11;
+    struct sa3ds_load l = sa3ds_load;
+
+    if (l.opens == 0 && l.textures_made == 0 && l.program_bytes == 0) {
+        return;
+    }
+    memset(&sa3ds_load, 0, sizeof sa3ds_load);
+    native_log("sa3ds: %s %.2f s, game_mode %d: %lu opens, finding %.0f ms and opening %.0f; "
+               "%lu reads of %.1f MB in %.0f ms; %lu PRS decoded in %.0f ms; programs' data "
+               "%.1f MB in %.0f ms; %lu textures in %.0f ms",
+               what, span * ms / 1000.0, game_mode, (unsigned long)l.opens, l.find * ms, l.open * ms,
+               (unsigned long)l.reads, l.bytes / 1048576.0, l.read * ms,
+               (unsigned long)l.decoded, l.prs * ms, l.program_bytes / 1048576.0,
+               l.program * ms, (unsigned long)l.textures_made, l.textures * ms);
+}
+
 static void wait_vsync(void)
 {
     uint64_t now = svcGetSystemTick();
 
+    if (last_vsync_tick && now - last_vsync_tick >= LOAD_GAP) {
+        sa3ds_load_report("a load of", now - last_vsync_tick);
+    }
     if (last_vsync_tick) {
         sa3ds_ticks_all += now - last_vsync_tick;
     }
@@ -247,7 +284,6 @@ static void wait_vsync(void)
  * the disc file last opened, again every WATCH_AGAIN seconds while it lasts */
 #define WATCH_STALL 3
 #define WATCH_AGAIN 10
-extern int game_mode;
 static Thread watchdog;
 
 static void watchdog_main(void *unused)
@@ -299,6 +335,12 @@ static void open_watchdog(void)
     }
 }
 
+/* the buttons held at the last read, kept here and not taken from the game's
+ * record: the pause menu clears the record's buttons as it takes START, and a
+ * press read against that cleared record came again at the next read while
+ * START was still down, and opened the menu again */
+static uint32_t held_last;
+
 static void read_pad(void *record)
 {
     struct peripheral *pad = record;
@@ -306,8 +348,9 @@ static void read_pad(void *record)
     sa_pad sample;
 
     if (sa_input_sample(engine, 0, &sample) == SA_OK) {
-        pad->press = sample.on & ~pad->on;
-        pad->release = pad->on & ~sample.on;
+        pad->press = sample.on & ~held_last;
+        pad->release = held_last & ~sample.on;
+        held_last = sample.on;
         pad->on = sample.on;
         pad->off = ~sample.on;
         pad->x1 = sample.x1;

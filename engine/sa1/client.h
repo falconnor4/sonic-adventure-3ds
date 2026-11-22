@@ -126,6 +126,12 @@ public:
      * and its table (engine/3ds/texels.h) */
     FILE *gpu_pack = nullptr;
     std::vector<uint32_t> gpu_offsets, gpu_bytes;
+    /* the pack's bytes read last, from window_at: a PVM's textures lie
+     * together in the pack, and one read of the window serves the run of
+     * them a stage loads, where a read of each took a request of the file
+     * system each */
+    std::vector<uint8_t> gpu_window;
+    uint32_t gpu_window_at = 0;
     /* a texture of the index from the pack, or SA_NULL where the pack has
      * none of it */
     sa_handle packed_texture(int place);
