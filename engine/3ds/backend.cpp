@@ -293,16 +293,21 @@ bool make_texture(Backend &b, const pc::Image &image, uint32_t &index)
         return false;
     }
     auto *out = static_cast<uint16_t *>(made.tex.data);
+    /* each texel's column in the image, found once: the ARM11 divides in
+     * software, and a movie's frames come 30 times a second */
+    static uint32_t columns[1024];
 
+    for (uint32_t x = 0; x < w; x++) {
+        columns[x] = x * image.width / w;
+    }
     for (uint32_t y = 0; y < h; y++) {
-        uint32_t sy = (uint32_t)((uint64_t)y * image.height / h);
+        const uint8_t *line = &rgba[(size_t)(y * image.height / h) * image.width * 4];
         /* the GPU's row y from the bottom holds the image's row from the
          * top that lies h - 1 - y down */
         uint32_t gy = h - 1 - y;
 
         for (uint32_t x = 0; x < w; x++) {
-            uint32_t sx = (uint32_t)((uint64_t)x * image.width / w);
-            const uint8_t *p = &rgba[((size_t)sy * image.width + sx) * 4];
+            const uint8_t *p = &line[columns[x] * 4];
             uint16_t v;
 
             if (format == GPU_RGB565) {
