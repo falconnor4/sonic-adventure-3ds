@@ -42,6 +42,8 @@ struct sa_engine *native_sound_engine;
 #define ADX_LOOP_END 0x24
 #define ADX_HEAD 0x2c
 #define ADX_LOOP_HEAD 0x30
+/* the bytes of a file the 3DS reads ahead of its stream: the header whole */
+#define ADX_HEAD_READ 0x800
 #define ADX_BLOCK 18
 #define ADX_BLOCK_SAMPLES 32
 /* the streams the adapter keeps at once. the game makes its music's and its
@@ -574,10 +576,56 @@ void ADXT_Destroy(ADXT adxt)
     }
 }
 
+#ifdef SA_3DS
+/* the 3DS has no room for a song's file whole: it reads the header alone,
+ * and the engine plays the rest from the file as it goes */
+void sa_3ds_audio_stream_file(struct sa_engine *engine, uint32_t stream,
+                              FILE *file, uint32_t base, uint32_t bytes);
+
+static void start_file(struct talk *talk, const char *name, long offset,
+                       size_t size, int32_t wait_ms)
+{
+    FILE *file = native_disc_file(name);
+    size_t head;
+    uint32_t game;
+
+    if (!file) {
+        start(talk, 0, wait_ms);
+        return;
+    }
+    if (size == 0 && fseek(file, 0, SEEK_END) == 0) {
+        size = (size_t)ftell(file);
+    }
+    head = read_bytes(name, offset, size < ADX_HEAD_READ ? size : ADX_HEAD_READ);
+    if (head < ADX_HEAD || (bytes[0] << 8 | bytes[1]) != ADX_MARK ||
+        !native_sound_engine) {
+        fclose(file);
+        start(talk, head, wait_ms);
+        return;
+    }
+    talk->rate = big32(bytes + ADX_RATE);
+    talk->samples = big32(bytes + ADX_SAMPLES);
+    talk->loops = loops(head);
+    talk->started = native_vsyncs;
+    talk->stat = ADXT_STAT_PLAYING;
+    if (wait_ms) {
+        command(SA_AUDIO_STREAM_WAIT, (uint32_t)talk->stream, 0, wait_ms, 0, 0);
+    }
+    game = native_fpu_host();
+    sa_3ds_audio_stream_file(native_sound_engine, (uint32_t)talk->stream, file,
+                             (uint32_t)offset, (uint32_t)size);
+    native_fpu_game(game);
+}
+#endif
+
 void ADXT_StartFname(ADXT adxt, char *fname)
 {
     if (adxt) {
+#ifdef SA_3DS
+        start_file((struct talk *)adxt, fname, 0, 0, READ_AHEAD_MS);
+#else
         start((struct talk *)adxt, read_bytes(fname, 0, 0), READ_AHEAD_MS);
+#endif
     }
 }
 
@@ -638,7 +686,13 @@ void ADXT_StartAfs(ADXT adxt, Sint32 patid, Sint32 fid)
 
     (void)patid;
     if (adxt && fid >= 0 && fid < afs_count) {
+#ifdef SA_3DS
+        start_file((struct talk *)adxt, afs_name, afs_offset[fid], afs_size[fid],
+                   0);
+        return;
+#else
         size = read_bytes(afs_name, afs_offset[fid], afs_size[fid]);
+#endif
     }
     if (adxt) {
         start((struct talk *)adxt, size, 0);

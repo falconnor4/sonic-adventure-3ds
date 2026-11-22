@@ -79,7 +79,7 @@ TABLE = Path(__file__).parents[1] / 'native/stubs.txt'
 FUNCTION, ZEROS, ADDRESS, ENGINE, UNSUPPORTED = KINDS = ('function', 'zeros', 'address', 'engine', 'unsupported')
 # the uses of a name that each kind stands for
 FITS = {FUNCTION: {FUNCTION}, ZEROS: {ZEROS}, ADDRESS: {ADDRESS}, ENGINE: {FUNCTION}, UNSUPPORTED: {FUNCTION, ZEROS}}
-HOSTS = ('linux', 'windows')
+HOSTS = ('linux', 'windows', '3ds')
 EVERY = '*'
 # a row's kind and host, and its path:line
 Row = namedtuple('Row', 'kind host where')
@@ -93,7 +93,7 @@ HEAP_ALIGNMENT = 32
 # the names the host's linker defines, which the shim reads, and the P2 call
 # native.mk's link places
 LINKER = {'__executable_start', 'etext', 'edata', 'end', '__data_start', '_end',
-          '_GLOBAL_OFFSET_TABLE_', 'syCacheICI_P2_'}
+          '_GLOBAL_OFFSET_TABLE_', 'syCacheICI_P2_', '__game_ram'}
 
 
 def rows(path, host):
@@ -162,6 +162,24 @@ def main(out, *args):
         at = args.index('--libraries')
         end = next((i for i in range(at + 1, len(args)) if args[i].startswith('--')), len(args))
         libraries, args = list(args[at + 1:end]), args[:at] + args[end:]
+    target = None
+    if '--host' in args:
+        at = args.index('--host')
+        target = args[at + 1]
+        args = args[:at] + args[at + 2:]
+    # the 3DS's RAM lies at --ram, where rambase.py moves the game's
+    # 0x0c000000 and its views: an address the tables place there moves too
+    ram = None
+    if '--ram' in args:
+        at = args.index('--ram')
+        ram = int(args[at + 1], 0)
+        args = args[:at] + args[at + 2:]
+
+    def moved(address):
+        if ram is not None and address & 0x1f000000 == 0x0c000000:
+            return ram | address & 0xffffff
+        return address
+
     base = 0
     if '--base' in args:
         at = args.index('--base')
@@ -194,8 +212,10 @@ def main(out, *args):
             called |= calls(obj)
     else:
         for obj in objects:
-            run = subprocess.run(['readelf', '-rW', obj], capture_output=True, text=True, check=True)
-            called.update(m[1] for m in re.finditer(r'R_(?:X86_64_PLT32|386_PLT32|386_PC32)\s+\S+\s+(\w+)',
+            run = subprocess.run([os.environ.get('READELF', 'readelf'), '-rW', obj], capture_output=True, text=True,
+                                 check=True)
+            called.update(m[1] for m in re.finditer(
+                r'R_(?:X86_64_PLT32|386_PLT32|386_PC32|ARM_CALL|ARM_JUMP24|ARM_PLT32)\s+\S+\s+(\w+)',
                                                     run.stdout))
     ends = {WORK[image][0]: Config(image).span()[1] for image in WORK}
     # a name the slice reads where COFF's library gives code is the game's
@@ -207,7 +227,7 @@ def main(out, *args):
     use = {name: ADDRESS if name in ends or name in placed else FUNCTION if name in called else ZEROS
            for name in missing}
     # the slice's objects are COFF for Windows alone
-    target = HOSTS[coff]
+    target = target or HOSTS[coff]
     allowed = rows(TABLE, target)
     said = {FUNCTION: 'an object calls it', ZEROS: 'no object calls it and the tables place none of it',
             ADDRESS: 'the tables place it'}
@@ -217,13 +237,20 @@ def main(out, *args):
                 if name not in allowed]
     problems += [f'{row.where}: {name}: its row gives {row.kind}, and {said[use[name]]}: its kind is {fits[name]}'
                  for name, row in allowed.items() if name in use and use[name] not in FITS[row.kind]]
+    # the 3DS links its own backend and runner, which define names a row
+    # for every host gives the PC's link, so only a row of its own must be
+    # needed there
     problems += [f'{row.where}: {name}: no object needs it, or one defines it: remove the row'
-                 for name, row in allowed.items() if name not in use]
+                 for name, row in allowed.items() if name not in use and (target != '3ds' or row.host != EVERY)]
     if problems and not explore:
         fail(*problems)
     lines = ['/* the native slice\'s stubs, as engine/tools/stubs.py writes them */',
              'void native_stub(const char *name);',
-             '#define ZERO_FLOAT __asm__ volatile("xorps %%xmm0, %%xmm0" ::: "xmm0")', '']
+             '#ifdef __arm__',
+             '#define ZERO_FLOAT __asm__ volatile("vmov s0, %0" :: "r"(0) : "s0")',
+             '#else',
+             '#define ZERO_FLOAT __asm__ volatile("xorps %%xmm0, %%xmm0" ::: "xmm0")',
+             '#endif', '']
     written = dict.fromkeys(KINDS, 0)
     for name in missing:
         # a row whose kind doesn't fit its name's use is one of problems, and the use decides what --explore writes
@@ -232,12 +259,13 @@ def main(out, *args):
         if kind == ENGINE:
             continue
         if name in ends:
-            lines.append(f'void *{name} = (void *){base + ends[name]:#x}ULL;')
+            lines.append(f'void *{name} = (void *){base + moved(ends[name]):#x}ULL;')
         elif name in placed:
             at, room = placed[name]
             # COFF types and sizes no symbol
-            typed = '' if coff else f'.type {name}, @object\\n.size {name}, {room:#x}\\n'
-            lines.append(f'__asm__(".globl {name}\\n{typed}.set {name}, {base + at:#x}");')
+            mark = '%' if target == '3ds' else '@'
+            typed = '' if coff else f'.type {name}, {mark}object\\n.size {name}, {room:#x}\\n'
+            lines.append(f'__asm__(".globl {name}\\n{typed}.set {name}, {base + moved(at):#x}");')
         elif use[name] == FUNCTION:
             lines.append(f'long {name}(void) {{ native_stub("{name}"); ZERO_FLOAT; return 0; }}')
         else:

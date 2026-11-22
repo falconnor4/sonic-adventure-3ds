@@ -247,6 +247,7 @@ The PC keeps the game's VMU data in files. From the game's point of view, storag
 | `make dc` | The GCC Dreamcast port |
 | `make dc-disc` | A disc image of the Dreamcast port |
 | `make pc` | The native game, `play`, from the disc |
+| `make 3ds` | The New 3DS game's `.3dsx`, and the probe ([3DS.md](3DS.md)) |
 | `make play` | The native game in a window, from Emerald Coast's start |
 | `make native` | A headless run of the native game for a fixed count of frames |
 | `make engine-test` | The ABI, runtime, numeric and backend tests |

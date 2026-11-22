@@ -869,13 +869,21 @@ def write(path, program):
     # whichever a function takes, as each class has registers of its own
     # there. a register widens as a pointer, whose low half a number keeps,
     # and the float result is read where those calls leave it. Windows and
-    # every other processor pass them another way, so there such a JSR ends
-    # the run
+    # most other processors pass them another way, so there such a JSR ends
+    # the run. the ARM's hard-float calls keep the classes apart as x86-64's
+    # do
     out += ['#if defined(__x86_64__) && !defined(_WIN32)',
             '    uintptr_t r_ = ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, float, float, float, float))'
             'widened(target))(widened(R[4]), widened(R[5]), widened(R[6]), widened(R[7]), F.f[4], F.f[5], F.f[6], '
             'F.f[7]);',
             '    __asm__ volatile("movss %%xmm0, %0" : "=m"(F.f[0]));', '    R[0] = (uint32_t)r_;',
+            # the ARM's hard-float calls pass the two classes apart too: r0
+            # to r3 and s0 to s3, and give a float back in s0. a pointer is
+            # 32 bits there, so nothing widens
+            '#elif defined(__arm__) && defined(__ARM_PCS_VFP)',
+            '    uint32_t r_ = ((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t, float, float, float, float))'
+            '(uintptr_t)target)(R[4], R[5], R[6], R[7], F.f[4], F.f[5], F.f[6], F.f[7]);',
+            '    __asm__ volatile("vstr s0, %0" : "=m"(F.f[0]));', '    R[0] = r_;',
             '#else',
             '    fprintf(stderr, "sa1: a JSR reached %#x, the game\'s C, which asm2c.py\'s C calls by x86-64\'s '
             'System V convention alone: run it on such a host, or lift the function the JSR calls\\n", '

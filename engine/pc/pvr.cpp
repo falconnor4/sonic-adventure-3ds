@@ -1,6 +1,7 @@
 #include "pvr.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <algorithm>
@@ -12,7 +13,12 @@ namespace pc {
 namespace {
 
 /* the most files read_ holds */
+#ifdef SA_3DS
+/* the 3DS's heap holds two of a stage's decompressed PVMs, not eight */
+constexpr size_t MOST_READ = 2;
+#else
 constexpr size_t MOST_READ = 8;
+#endif
 
 /* the PVR header's pixel formats and data layouts */
 enum { ARGB1555 = 0, RGB565 = 1, ARGB4444 = 2, YUV422 = 3 };
@@ -401,6 +407,100 @@ void Textures::index(const Disc &disc, const std::string &dir)
             }
         }
     }
+}
+
+namespace {
+
+/* the index's file: its magic, then each place as its path, its name, and
+ * four words, compressed, global_index, at and file. a string is its length
+ * in a word, then its bytes */
+constexpr uint32_t INDEX_MAGIC = 0x58444956; /* VIDX */
+
+void put_word(FILE *out, uint32_t word)
+{
+    uint8_t b[4] = {static_cast<uint8_t>(word), static_cast<uint8_t>(word >> 8),
+                    static_cast<uint8_t>(word >> 16),
+                    static_cast<uint8_t>(word >> 24)};
+
+    fwrite(b, 1, sizeof b, out);
+}
+
+bool get_word(FILE *in, uint32_t &word)
+{
+    uint8_t b[4];
+
+    if (fread(b, 1, sizeof b, in) != sizeof b) {
+        return false;
+    }
+    word = static_cast<uint32_t>(b[0]) | static_cast<uint32_t>(b[1]) << 8 |
+           static_cast<uint32_t>(b[2]) << 16 | static_cast<uint32_t>(b[3]) << 24;
+    return true;
+}
+
+void put_string(FILE *out, const std::string &s)
+{
+    put_word(out, static_cast<uint32_t>(s.size()));
+    fwrite(s.data(), 1, s.size(), out);
+}
+
+bool get_string(FILE *in, std::string &s)
+{
+    uint32_t size;
+
+    if (!get_word(in, size) || size > 4096) {
+        return false;
+    }
+    s.resize(size);
+    return size == 0 || fread(&s[0], 1, size, in) == size;
+}
+
+} // namespace
+
+bool Textures::write_index(const std::string &path) const
+{
+    FILE *out = fopen(path.c_str(), "wb");
+
+    if (out == nullptr) {
+        return false;
+    }
+    put_word(out, INDEX_MAGIC);
+    put_word(out, static_cast<uint32_t>(places_.size()));
+    for (const PvrPlace &p : places_) {
+        put_string(out, p.path);
+        put_string(out, p.name);
+        put_word(out, p.compressed ? 1 : 0);
+        put_word(out, p.global_index);
+        put_word(out, p.at);
+        put_word(out, p.file);
+    }
+    return fclose(out) == 0;
+}
+
+bool Textures::read_index(const std::string &path)
+{
+    FILE *in = fopen(path.c_str(), "rb");
+    std::vector<PvrPlace> places;
+    uint32_t magic = 0, count = 0;
+    bool ok = in != nullptr && get_word(in, magic) && magic == INDEX_MAGIC &&
+              get_word(in, count);
+
+    for (uint32_t i = 0; ok && i < count; i++) {
+        PvrPlace p;
+        uint32_t compressed = 0;
+
+        ok = get_string(in, p.path) && get_string(in, p.name) &&
+             get_word(in, compressed) && get_word(in, p.global_index) &&
+             get_word(in, p.at) && get_word(in, p.file);
+        p.compressed = compressed != 0;
+        places.push_back(std::move(p));
+    }
+    if (in != nullptr) {
+        fclose(in);
+    }
+    if (ok) {
+        places_ = std::move(places);
+    }
+    return ok;
 }
 
 bool Textures::load(const Disc &disc, uint32_t global_index,

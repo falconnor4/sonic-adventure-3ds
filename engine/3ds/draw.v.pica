@@ -1,0 +1,31 @@
+; the 3DS backend's vertex shader: the CPU has placed each corner in clip
+; space, turned to the top screen's rotation, so a corner passes through as
+; it comes, with its texture coordinate and its color. for the stereoscopic
+; screen, eye moves it across the picture by its depth: eye.x times its w
+; less eye.y, the depth that stays at the screen. clip y is across the
+; picture, as the screen is turned a quarter
+
+; Uniforms
+.fvec eye
+
+; Inputs
+.alias inpos v0
+.alias intex v1
+.alias inclr v2
+
+; Outputs
+.out outpos position
+.out outtex texcoord0
+.out outclr color
+
+.proc main
+	mov r0, inpos
+	mov r1, eye
+	add r2.x, inpos.w, -r1.y
+	mul r2.x, r2.x, r1.x
+	add r0.y, r0.y, -r2.x
+	mov outpos, r0
+	mov outtex, intex
+	mov outclr, inclr
+	end
+.end

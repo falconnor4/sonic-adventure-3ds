@@ -24,11 +24,20 @@ constexpr uint32_t BANKS = 128;
 constexpr uint32_t STREAMS = 2;
 /* the DSP's outputs */
 constexpr uint32_t FX_OUTPUTS = 16;
+#ifdef SA_3DS
+/* the 3DS's ring carries banks alone, at most the sound memory's size twice:
+ * a stream reads its file from the SD card as it plays, through a window of
+ * STREAM_WINDOW bytes (Sound::stream_file) */
+constexpr uint32_t SOUND_BYTES = 3U << 20;
+constexpr uint32_t STREAM_BYTES = 32U << 20;
+constexpr uint32_t STREAM_WINDOW = 32U << 10;
+#else
 /* the byte ring's size. the ring carries banks and streams to the render */
 constexpr uint32_t SOUND_BYTES = 32U << 20;
 /* the most a stream's file holds: over eight minutes of stereo ADX at
  * 44.1 kHz */
 constexpr uint32_t STREAM_BYTES = 24U << 20;
+#endif
 /* a stream's channels at the most, and the samples an ADX block gives each */
 constexpr uint32_t STREAM_CHANNELS = 2;
 constexpr uint32_t ADX_CODES = 32;
@@ -116,6 +125,14 @@ struct Sequence {
 struct Stream {
     uint8_t *data;
     uint32_t bytes;
+#ifdef SA_3DS
+    /* the file the stream reads, a FILE, and where data's window of it
+     * starts and how much it holds */
+    void *file;
+    uint32_t base; /* where the stream's ADX file starts in file */
+    uint32_t window_at, window_bytes;
+    uint32_t room; /* data's bytes, STREAM_WINDOW or more */
+#endif
     bool playing;
     bool ending; /* the file has run out: following repeats current */
     uint32_t channels, rate, samples, offset;
@@ -151,6 +168,8 @@ struct Entry {
     sa_audio_bank bank; /* its bytes lie in the byte ring, not at data */
     uint32_t stream;
     uint64_t at, end; /* its bytes in the ring, unwrapped. end is 0 for none */
+    void *file; /* a stream's open file, under SA_3DS, or null */
+    uint32_t file_base, file_bytes;
 };
 
 class Sound {
@@ -161,6 +180,13 @@ public:
     sa_result submit(const sa_audio_command *commands, uint32_t count);
     sa_result load(const sa_audio_bank &bank);
     sa_result stream(uint32_t index, const void *data, uint32_t bytes);
+#ifdef SA_3DS
+    /* play stream from an ADX file of bytes at base in file, a FILE, which
+     * the render reads as it plays and closes as the stream ends. the call
+     * takes the file, whatever it returns */
+    sa_result stream_file(uint32_t index, void *file, uint32_t base,
+                          uint32_t bytes);
+#endif
     /* the render's thread: carry out the queue, then render frames of two
      * int16_t */
     void render(int16_t *out, uint32_t frames);
@@ -188,6 +214,9 @@ private:
     void stream_frame(Stream &stream, float &left, float &right);
     bool stream_take(Stream &stream, int16_t *out);
     bool stream_decode(Stream &stream);
+    /* the stream's bytes at at, n of them, or null past its file */
+    const uint8_t *stream_at(Stream &stream, uint32_t at, uint32_t n);
+    void stream_close(Stream &stream);
     void lfo_frame(Voice &voice, double &pitch, double &gain);
     float filter_frame(Voice &voice, float x);
     void fx_program(uint32_t program, uint32_t output_set);

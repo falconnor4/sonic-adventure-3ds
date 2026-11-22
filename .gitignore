@@ -10,6 +10,10 @@
 /tools/glslang
 /tools/pl_mpeg
 /tools/vulkan
+/tools/devkitpro
+/tools/devkitpro.txt
+/tools/3ds-tools
+/tools/makerom
 
 # Python's bytecode from a tool run outside make, which puts it in build/
 __pycache__/
