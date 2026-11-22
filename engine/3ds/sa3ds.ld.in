@@ -189,15 +189,13 @@ SECTIONS
 	   ==== Metadata ====
 	   ================== */
 
-	/* the game's RAM: 16 MiB at a fixed address, inside the application's
-	   region and above the image's data and bss. it is BSS, so the loader maps
-	   and zeroes it, and the game's RAM areas are its own addresses, rebased by
-	   rambase.py. its base is a multiple of 16 MiB, as the rebase ORs it in */
-	ASSERT(. <= @RAM@, "the image's bss passes the game's RAM: raise 3DS_RAM in engine/mk/3ds.mk")
-	. = @RAM@;
-	.game_ram (NOLOAD) : AT(@RAM@) { __game_ram = .; . += 0x01000000; } : data
+	/* the game's RAM: 16 MiB at a fixed address in the heap's region, which
+	   engine/3ds/main.c's __system_allocateHeaps allocates as the program
+	   starts. the game's RAM areas are its own addresses, rebased by rambase.py
+	   where its base is not the Dreamcast's 0x0c000000 */
+	__game_ram = @RAM@;
 
-	/* each program's data and bss, past the game's RAM, in regions that
+	/* each program's data and bss, past the image's bss, in regions that
 	   overlay those of one origin, as engine/tools/overlays.py writes them */
 @PROGRAMS@
 	__bss_end__ = .;

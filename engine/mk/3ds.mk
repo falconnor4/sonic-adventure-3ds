@@ -50,9 +50,11 @@ TARGET_CXX := $(3DS_BIN)g++
 # and the PC's are, where ARM's own is unsigned: the game and the engine
 # test a char's sign
 3DS_ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mfpu=vfp -marm -mtp=soft -fsigned-char
-# the game's RAM, where rambase.py moves the game's 0x0c000000 and its views,
-# and the bytes of it: the linker script reserves them as BSS past the image
-3DS_RAM := 0x02000000
+# the game's RAM, where rambase.py moves the game's 0x0c000000 and its views:
+# 0x0c000000 itself, in the heap's region, which engine/3ds/main.c allocates
+# as the program starts. there the pointers the disc's files hold into
+# themselves stand as they are, as on the PC, which maps RAM there too
+3DS_RAM := 0x0c000000
 
 # the game's C keeps SHC's rules, as the native slice compiles it: no strict
 # aliasing, null tests kept, signed arithmetic that wraps, common symbols, no

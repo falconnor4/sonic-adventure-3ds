@@ -202,9 +202,9 @@ void njSetVSyncFunction(void (*function)(void))
     vsync_function = function;
 }
 
-/* there is no domain to map: the linker script's reservation is the game's
- * RAM, and the threads' stacks come from the heap. a map the shim asks for
- * must lie in the reservation */
+/* there is no domain to map: the 16 MB __system_allocateHeaps takes at
+ * __game_ram are the game's RAM, and the threads' stacks come from the heap. a
+ * map the shim asks for must lie in the game's RAM */
 extern char __game_ram[];
 
 void native_map(void *at, size_t size, const char *what)
@@ -469,6 +469,12 @@ extern u32 __ctru_heap, __ctru_heap_size, __ctru_linear_heap;
 extern char *fake_heap_start, *fake_heap_end;
 void mappableInit(u32 address_min, u32 address_max);
 
+/* the game's RAM: 16 MB at SA_3DS_RAM, 0x0c000000, the Dreamcast's own
+ * address. it lies in the heap's region, past the heap, so a fixed
+ * allocation takes it, and the pointers the disc's files hold into
+ * themselves, as Station Square's messages do, point into it as they stand */
+#define GAME_RAM_BYTES 0x01000000U
+
 void __system_allocateHeaps(void)
 {
     Handle limits = 0;
@@ -485,6 +491,16 @@ void __system_allocateHeaps(void)
     free = (u32)(most - used) & ~0xfffU;
     granted = (u32)most;
     granted_free = free;
+    /* the game's RAM first, at its own address in the heap's region: where
+     * it can't be had, main tells the player, and nothing reads it */
+    if (free >= GAME_RAM_BYTES &&
+        R_SUCCEEDED(svcControlMemory(&at, SA_3DS_RAM, 0, GAME_RAM_BYTES, MEMOP_ALLOC,
+                                     MEMPERM_READ | MEMPERM_WRITE))) {
+        memset((void *)SA_3DS_RAM, 0, GAME_RAM_BYTES);
+        free -= GAME_RAM_BYTES;
+    } else {
+        short_of_memory = 1;
+    }
     if (free < __ctru_linear_heap_size + HEAP_NEEDED) {
         short_of_memory = 1;
         __ctru_linear_heap_size = (free / 2) & ~0xfffU;

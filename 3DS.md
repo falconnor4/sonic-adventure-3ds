@@ -120,8 +120,12 @@ A `.3dsx` always loads at `0x00100000`, and maps nothing else
 the marked tree, and `--casts` each preprocessed unit, so that:
 
 - main RAM, the game's `0x0c000000` and its `0x8c` and `0xac` views, is 16 MiB
-  of BSS at `3DS_RAM`, `0x02000000`, which the linker script places past the
-  image's own data and bss;
+  at `3DS_RAM`, `0x0c000000` itself, which `__system_allocateHeaps` allocates
+  at that address in the heap's region as the program starts. The disc's
+  files hold pointers into themselves, as Station Square's crowd messages do,
+  and at the Dreamcast's own address they stand as they are. (At `0x02000000`
+  Azahar read them as zeros, so the crowd never spoke, and a console faulted
+  as Sonic's story opened);
 - a pointer cast of an SH-4 register or a Dreamcast device's address points
   into `sa3ds_devices`, a megabyte of zeros, as the PC maps zeros there;
 - the store queues, which Ninja's drawers write vertices through, point into
