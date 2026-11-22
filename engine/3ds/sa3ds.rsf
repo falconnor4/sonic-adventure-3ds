@@ -37,8 +37,8 @@ AccessControlInfo:
   IdealProcessor          : 0
   AffinityMask            : 1
   Priority                : 16
-  # the system core's time the program may take, up to 80%: the sound's
-  # thread runs there where the third core is closed to it
+  # the system core's time the program may take, up to 80%, where a thread
+  # runs there
   MaxCpu                  : 0xD0
   DisableDebug            : false
   EnableForceDebug        : false
@@ -49,16 +49,15 @@ AccessControlInfo:
   CanShareDeviceMemory    : true
   RunnableOnSleep         : false
   SpecialMemoryArrange    : true
-  # the New 3DS's 124 MB, which the game needs. the exheader asks for no
-  # 804 MHz, L2 cache or third core: a CIA that asks for them starts in the
-  # 64 MB mode on some consoles (as legend-of-doom-3ds found), so the runner
-  # turns the clock and the cache on as it starts (osSetSpeedupEnable).
-  # SystemMode is an Old 3DS's, which can't run the game
+  # as a New 3DS title's exheader is: the Old 3DS's standard 64 MB mode, and
+  # the New 3DS's 124 MB, its 804 MHz, its L2 cache and its third core. an
+  # Old 3DS mode other than the standard one is a developer unit's layout,
+  # which a retail console restarts into to launch the title, and fails
   SystemModeExt           : 124MB
-  CpuSpeed                : 268MHz
-  EnableL2Cache           : false
-  CanAccessCore2          : false
-  SystemMode              : 80MB
+  CpuSpeed                : 804MHz
+  EnableL2Cache           : true
+  CanAccessCore2          : true
+  SystemMode              : 64MB
   MemoryType              : Application
   HandleTableSize         : 0x200
   SystemCallAccess:

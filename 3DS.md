@@ -34,12 +34,12 @@ logo's place, fitted to 256 by 128 on clear.
 The icon can't be clear: the HOME Menu's icons hold no alpha, so the label
 lies on white.
 
-The CIA is a New 3DS title, platform SNAKE with a KTR- product code: a
-console started it as a CTR title in the Old 3DS's 64 MB however its exheader
-asked for 124 MB. Where a console gives the game too little memory all the
-same, it says so on the screen, with the figures, and asks for a restart. The
-exheader asks for no 804 MHz or L2 cache, which made other homebrew start in
-64 MB; the runner turns both on as it starts.
+The CIA's exheader is a New 3DS title's: platform SNAKE with a KTR- product
+code, the Old 3DS's standard 64 MB mode, and the New 3DS's 124 MB, 804 MHz and
+L2 cache. A console started it as a CTR title in 64 MB, and an Old 3DS mode
+other than the standard one, a developer unit's layout, made the HOME Menu
+restart the console to launch it. Where a console gives the game too little
+memory all the same, it says so on the screen, with the figures.
 
 The CIA takes makerom (Project_CTR's) and bannertool (carstene1ns's fork),
 which nixpkgs doesn't package: `make 3ds-cia` fetches each release's Linux
