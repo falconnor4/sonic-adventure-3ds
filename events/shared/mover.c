@@ -31,6 +31,27 @@ void event_mover_step(struct task *task)
     NJS_VECTOR moved;
     struct angles turned;
 
+    /* @bug memory: a follow or facing move reads its base's work with no
+     * test, and a base killed before its move ends leaves the work null, so
+     * each step reads the base's position or angles from address 0x20 on.
+     * the Dreamcast reads its BIOS ROM there and goes on; a host that maps
+     * nothing at 0 stops. Sonic's story meets it in the event after the Egg
+     * Hornet, as Mystic Ruins loads */
+#ifdef NONMATCHING
+    /* repairs the read the tag names: with its base gone, the move leaves
+     * its target where it stands and counts its steps out, so the event's
+     * timing holds */
+    if ((work->mode == MOVER_FOLLOW || work->mode == MOVER_FOLLOW_ANGLES ||
+         work->mode == MOVER_FOLLOW_TURN || work->mode == MOVER_FACING) &&
+        (move->base == NULL || move->base->work == NULL)) {
+        if (++move->step >= move->steps) {
+            work->mode = work->mode == MOVER_FOLLOW          ? MOVER_FOLLOW_END
+                         : work->mode == MOVER_FOLLOW_ANGLES ? MOVER_FOLLOW_ANGLES_END
+                                                             : MOVER_FOLLOW_TURN_END;
+        }
+        return;
+    }
+#endif
     switch (work->mode) {
     case MOVER_IDLE:
         break;
