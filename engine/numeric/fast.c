@@ -34,6 +34,31 @@ typedef char arithmetic_shift[(-1 >> 1) == -1 ? 1 : -1];
 
 /* sine_words holds the bits of each sine over the first half turn, which
  * sine.c prints from the reference */
+/* SA_NUMERIC_NATIVE takes FIPR and FTRV in the host's own float arithmetic,
+ * for a host too slow for their exact forms, as the 3DS's ARM11 is: a FIPR
+ * or an FTRV gives the SH-4's to within its last bits, so play may part from
+ * the console's where a result lies on a rounding's edge. no other build
+ * defines it, and ENGINE.md#numbers holds for every build that doesn't */
+#ifdef SA_NUMERIC_NATIVE
+static inline float native_fipr(const float a[4], const float b[4])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+}
+
+static inline void native_ftrv(const float m[16], const float v[4], float out[4])
+{
+    float o[4];
+
+    for (int i = 0; i < 4; i++) {
+        o[i] = m[i] * v[0] + m[4 + i] * v[1] + m[8 + i] * v[2] + m[12 + i] * v[3];
+    }
+    out[0] = o[0];
+    out[1] = o[1];
+    out[2] = o[2];
+    out[3] = o[3];
+}
+#endif
+
 #ifdef SA_NUMERIC_CONSOLE
 #include "sine-console.h"
 #else
@@ -376,6 +401,11 @@ float sa_fipr(const float a[4], const float b[4])
     int n = factors_of(b, factors, &zeros);
     uint32_t word;
 
+#ifdef SA_NUMERIC_NATIVE
+    (void)factors, (void)zeros, (void)special, (void)n, (void)word;
+    return native_fipr(a, b);
+#endif
+
     if (n < 0 || special_under_zeros(zeros, a, 1, 1) != 0) {
         return ref_fipr(a, b);
     }
@@ -391,6 +421,12 @@ void sa_ftrv(const float m[16], const float v[4], float out[4])
     int n = factors_of(v, factors, &zeros);
     uint32_t ob[4];
     int i;
+
+#ifdef SA_NUMERIC_NATIVE
+    (void)factors, (void)zeros, (void)special, (void)n, (void)ob, (void)i;
+    native_ftrv(m, v, out);
+    return;
+#endif
 
     if (n >= 0 && special_under_zeros(zeros, m, 4, 4) == 0) {
         for (i = 0; i < 4; i++) {
@@ -601,6 +637,11 @@ float sa_fipr(const float a[4], const float b[4])
     int n = factors_of(b, factors, &zeros);
     uint32_t word;
 
+#ifdef SA_NUMERIC_NATIVE
+    (void)factors, (void)zeros, (void)special, (void)n, (void)word;
+    return native_fipr(a, b);
+#endif
+
     if (n < 0 || special_under_zeros(zeros, a, 1, 1) != 0) {
         return ref_fipr(a, b);
     }
@@ -616,6 +657,12 @@ void sa_ftrv(const float m[16], const float v[4], float out[4])
     int n = factors_of(v, factors, &zeros);
     uint32_t ob[4];
     int i;
+
+#ifdef SA_NUMERIC_NATIVE
+    (void)factors, (void)zeros, (void)special, (void)n, (void)ob, (void)i;
+    native_ftrv(m, v, out);
+    return;
+#endif
 
     if (n >= 0 && special_under_zeros(zeros, m, 4, 4) == 0) {
         for (i = 0; i < 4; i++) {

@@ -236,8 +236,10 @@ $(3DS_ASM_OBJ): $(3DS_ASM_C) $(3DS_MK) $(3DS_TREE)/overlaid.txt | $(3DS_DIR)
 	$(Q)$(TARGET_CC) $(3DS_ENGINE_CFLAGS) $(3DS_ENGINE_INC) -c -o $@ $<
 
 # play math, the SH-4's float operations as the target computes them. the
-# console build takes SA_NUMERIC_CONSOLE, so the bits are the console's
-$(eval $(call play_math,$(3DS_DIR)/numeric,$(TARGET_CC) $(3DS_ARCH) -O2 -std=gnu17 -w,$(3DS_MK),3ds))
+# console build takes SA_NUMERIC_CONSOLE, so the bits are the console's, but
+# for FIPR and FTRV, which SA_NUMERIC_NATIVE takes in the VFP's own
+# arithmetic: their exact forms took a third of the ARM11's time in play
+$(eval $(call play_math,$(3DS_DIR)/numeric,$(TARGET_CC) $(3DS_ARCH) -O2 -std=gnu17 -w -DSA_NUMERIC_NATIVE,$(3DS_MK),3ds))
 3DS_NUMERIC := $(call play_math_fast_console,$(3DS_DIR)/numeric)
 
 $(3DS_DIR) $(3DS_TREE):
@@ -456,13 +458,14 @@ $(3DS_ART)/icon.png $(3DS_ART)/banner.png $(3DS_ART)/banner.wav &: $(3DS_DIR)/ho
 	@$(call status,art,$(3DS_ART))
 	$(Q)mkdir -p $(3DS_ART)
 	$(Q)$< $(NATIVE_DISC) $(3DS_ART)
-# the banner's picture: the player's own where art/3ds/banner.png holds one,
-# as the game's logo cut out, fitted to 256 by 128 on clear with ImageMagick;
-# else the disc's label. art/ is the player's, and git keeps none of it
-3DS_BANNER_ART ?= art/3ds/banner.png
+# the banner's picture: the game's logo, cut out, from the disc's web pages,
+# ICO_ADV.GIF, fitted to 256 by 128 on clear with ImageMagick. a picture of the
+# player's own at art/3ds/banner.png takes its place, and git keeps none of
+# art/. without either, the disc's label
+3DS_BANNER_ART ?= $(firstword $(wildcard art/3ds/banner.png) $(wildcard $(NATIVE_DISC)/ICO_ADV.GIF))
 $(3DS_ART)/banner-shown.png: $(3DS_ART)/banner.png $(wildcard $(3DS_BANNER_ART))
 	$(Q)if [ -f "$(3DS_BANNER_ART)" ]; then \
-		magick "$(3DS_BANNER_ART)" -resize 248x124 -background none -gravity center -extent 256x128 \
+		magick "$(3DS_BANNER_ART)[0]" -resize 248x124 -background none -gravity center -extent 256x128 \
 			PNG32:$@; else cp $(3DS_ART)/banner.png $@; fi
 $(3DS_ART)/banner.bnr: $(BANNERTOOL) $(3DS_ART)/banner-shown.png $(3DS_ART)/banner.wav
 	@$(call status,banner,$@)

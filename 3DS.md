@@ -26,17 +26,20 @@ the disc in `orig/`. The host tools it runs need GNU make, Python 3 and a C++
 compiler; on NixOS, `nix-shell` in the checkout gives them (`shell.nix`).
 
 The `.3dsx` and the `.cia` hold data from your disc in their RomFS, and the
-icon and banner are the disc's label and the opening of its title theme
+icon is the disc's label, and the banner the game's logo from the disc's web
+pages (`ICO_ADV.GIF`) with the opening of its title theme
 (`engine/3ds/host/art.cpp`), so they are for your own use: don't share them. A
-picture of your own at `art/3ds/banner.png` (which git ignores), such as the
-game's logo cut out, takes the banner's place, fitted to 256 by 128 on clear.
+picture of your own at `art/3ds/banner.png` (which git ignores) takes the
+logo's place, fitted to 256 by 128 on clear.
 The icon can't be clear: the HOME Menu's icons hold no alpha, so the label
 lies on white.
 
-A New 3DS sometimes starts a title in the Old 3DS's 64 MB however its
-exheader asks, which the game can't run in; it then says so on the screen and
-asks for a restart. The exheader asks for no 804 MHz or L2 cache, which made
-other homebrew start in 64 MB; the runner turns both on as it starts.
+The CIA is a New 3DS title, platform SNAKE with a KTR- product code: a
+console started it as a CTR title in the Old 3DS's 64 MB however its exheader
+asked for 124 MB. Where a console gives the game too little memory all the
+same, it says so on the screen, with the figures, and asks for a restart. The
+exheader asks for no 804 MHz or L2 cache, which made other homebrew start in
+64 MB; the runner turns both on as it starts.
 
 The CIA takes makerom (Project_CTR's) and bannertool (carstene1ns's fork),
 which nixpkgs doesn't package: `make 3ds-cia` fetches each release's Linux
@@ -144,8 +147,13 @@ can't sort per pixel). The backend carries the corners into clip space and
 draws the batches through the texture combiner. The game draws its 16:9
 picture onto the top screen's 400 by 240. With the 3D slider up, each eye's
 picture shifts by depth in the vertex shader; the 2D layer stays at the
-screen. In play, the HUD's counters go to the bottom screen at 1.6 times their
-size.
+screen. In play, the HUD's counters, the 2D sprites in the picture's corners,
+go to the bottom screen at 1.6 times their size, over a blue gradient that
+stands there in every mode.
+
+Play math (`engine/numeric/`) keeps the SH-4's bits but for FIPR and FTRV,
+which the 3DS build (`SA_NUMERIC_NATIVE`) computes with the VFP's own
+arithmetic: their exact forms took about a third of the ARM11's time in play.
 
 Sound is the PC's AICA engine, `engine/pc/sound.cpp`, rendered on a thread of
 its own (the third core where there is one) into the DSP's buffers. Music and

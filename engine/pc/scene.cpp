@@ -621,6 +621,9 @@ void Scene::placed(const sa_sprite &s, uint32_t texture)
     float screen_z = 1.0F > -s.bias ? 1.0F : -s.bias;
     if (screen) {
         state.flags |= BATCH_SCREEN;
+#ifdef SA_3DS
+        state.flags |= BATCH_SPRITE_2D;
+#endif
     }
     if (facing) {
         /* Ninja sends a facing sprite whole, or drops it where its z lies

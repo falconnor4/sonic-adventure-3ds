@@ -493,11 +493,14 @@ inline void place_bottom(const pc::Vertex &v, bool right, bool lower, Corner &ou
  * draws, the 2D layer, stand at the screen's depth */
 void draw_batches(Backend &b, const std::vector<Placed> &placed, float separation)
 {
+    /* the state the last batch set, so a batch sets only what differs: each
+     * of citro3d's calls marks state the next draw sends the GPU again */
     float shown = NAN;
+    uint32_t bound = UINT32_MAX, sampled = UINT32_MAX, combined = UINT32_MAX;
+    uint32_t blended = UINT32_MAX, tested = UINT32_MAX;
 
     for (const Placed &p : placed) {
         const pc::Batch &batch = *p.batch;
-        uint32_t first = p.first;
         const pc::State &s = batch.state;
         float shift = s.flags & pc::BATCH_SCREEN ? 0.0F : separation;
 
@@ -509,7 +512,7 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
         bool textured = s.texture != 0 && s.texture <= b.textures.size() &&
                         b.textures[s.texture - 1].live;
 
-        if (textured) {
+        if (textured && (s.texture != bound || s.sample != sampled)) {
             C3D_Tex *tex = &b.textures[s.texture - 1].tex;
             GPU_TEXTURE_FILTER_PARAM filter =
                 (s.sample & pc::SAMPLE_FILTER) == SA_FILTER_POINT ? GPU_NEAREST
@@ -520,20 +523,74 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
                            wrap(s.sample, pc::SAMPLE_CLAMP_U, pc::SAMPLE_FLIP_U),
                            wrap(s.sample, pc::SAMPLE_CLAMP_V, pc::SAMPLE_FLIP_V));
             C3D_TexBind(0, tex);
+            bound = s.texture;
+            sampled = s.sample;
         }
-        combine(s.flags, textured);
-        if (s.blend) {
-            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD,
-                           blend_factor(s.src, true), blend_factor(s.dst, false),
-                           blend_factor(s.src, true), blend_factor(s.dst, false));
-        } else {
-            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO,
-                           GPU_ONE, GPU_ZERO);
+        uint32_t combine_key = (s.flags & (pc::BATCH_DECAL | pc::BATCH_OPAQUE)) | (textured ? 1U << 31 : 0);
+
+        if (combine_key != combined) {
+            combine(s.flags, textured);
+            combined = combine_key;
         }
-        C3D_DepthTest(true, depth_func(s.depth),
-                      s.depth_write ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
-        C3D_DrawArrays(GPU_TRIANGLES, (int)first, (int)p.count);
+        uint32_t blend_key = s.blend ? 0x10000U | s.src << 8 | s.dst : 0;
+
+        if (blend_key != blended) {
+            if (s.blend) {
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD,
+                               blend_factor(s.src, true), blend_factor(s.dst, false),
+                               blend_factor(s.src, true), blend_factor(s.dst, false));
+            } else {
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO,
+                               GPU_ONE, GPU_ZERO);
+            }
+            blended = blend_key;
+        }
+        uint32_t depth_key = (uint32_t)s.depth << 1 | s.depth_write;
+
+        if (depth_key != tested) {
+            C3D_DepthTest(true, depth_func(s.depth),
+                          s.depth_write ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
+            tested = depth_key;
+        }
+        C3D_DrawArrays(GPU_TRIANGLES, (int)p.first, (int)p.count);
     }
+}
+
+/* the bottom screen's backdrop under its HUD: a plain gradient, the game's
+ * deep blue at the top to a lighter blue at the bottom, as six corners from
+ * at. it returns the corner after them */
+constexpr uint32_t BACKDROP_TOP = 0xff401c08;    /* RGBA bytes: 08 1c 40 */
+constexpr uint32_t BACKDROP_BOTTOM = 0xffa0581c; /* RGBA bytes: 1c 58 a0 */
+
+uint32_t backdrop(Backend &b, uint32_t at)
+{
+    static const int order[6][2] = {{0, 0}, {1, 0}, {0, 1}, {0, 1}, {1, 0}, {1, 1}};
+
+    if (at + 6 > MOST_CORNERS) {
+        return at;
+    }
+    for (int k = 0; k < 6; k++) {
+        Corner &c = b.corners[at + k];
+        int i = order[k][0], j = order[k][1];
+
+        c.at[0] = j ? -1.0F : 1.0F;
+        c.at[1] = i ? -1.0F : 1.0F;
+        c.at[2] = -NEAR;
+        c.at[3] = 1.0F;
+        c.uv[0] = 0.0F;
+        c.uv[1] = 0.0F;
+        c.color = j ? BACKDROP_BOTTOM : BACKDROP_TOP;
+    }
+    return at + 6;
+}
+
+void draw_backdrop(Backend &b, uint32_t first)
+{
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, b.eye_uniform, 0.0F, STEREO_CONVERGENCE, 0.0F, 0.0F);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+    combine(0, false);
+    C3D_DrawArrays(GPU_TRIANGLES, (int)first, 6);
 }
 
 /* draw the scene's batches on the top screen, for each eye */
@@ -572,7 +629,7 @@ void render(Backend &b)
         if (sent + batch.count > MOST_CORNERS) {
             break;
         }
-        if (screen && play && !(batch.state.flags & pc::BATCH_FACING)) {
+        if (screen && play && (batch.state.flags & pc::BATCH_SPRITE_2D)) {
             /* each triangle to its screen, runs of one screen together */
             for (uint32_t i = 0; i + 2 < batch.count; i += 3) {
                 const pc::Vertex *tri = &vertices[batch.first + i];
@@ -606,6 +663,9 @@ void render(Backend &b)
         }
         sent += batch.count;
     }
+    uint32_t drop = sent;
+
+    sent = backdrop(b, sent);
     GSPGPU_FlushDataCache(b.corners, sent * sizeof(Corner));
 
     /* the 3D slider: at 0 the left eye's picture alone, which the screen
@@ -628,9 +688,12 @@ void render(Backend &b)
         C3D_CullFace(GPU_CULL_NONE);
         draw_batches(b, top, eyes == 2 ? separation : 0.0F);
     }
-    /* the bottom screen: the HUD in play, else black */
+    /* the bottom screen: its backdrop, and over it the HUD in play */
     C3D_RenderTargetClear(b.bottom, C3D_CLEAR_ALL, 0x000000ff, 0);
     C3D_FrameDrawOn(b.bottom);
+    if (sent > drop) {
+        draw_backdrop(b, drop);
+    }
     draw_batches(b, under, 0.0F);
     C3D_FrameEnd(0);
 }

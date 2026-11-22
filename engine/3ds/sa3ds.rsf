@@ -4,13 +4,17 @@
 
 BasicInfo:
   Title                   : SA3DS
-  ProductCode             : CTR-H-SA3D
+  ProductCode             : KTR-H-SA3D
   Logo                    : Homebrew
 
 RomFs:
   RootPath                : $(ROMFS)
 
 TitleInfo:
+  # a New 3DS title, as KTR- games are: the HOME Menu launches a CTR title,
+  # one the Old 3DS runs too, in the Old 3DS's 64 MB however its exheader
+  # asks, where the game needs the New 3DS's 124 MB
+  Platform                : SNAKE
   Category                : Application
   UniqueId                : 0xf5a31
 
