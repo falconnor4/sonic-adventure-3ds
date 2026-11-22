@@ -43,6 +43,13 @@ static uint32_t pictures, refused;
 uint64_t sa3ds_ticks_give, sa3ds_ticks_render, sa3ds_ticks_wait, sa3ds_ticks_all;
 static uint64_t last_vsync_tick;
 
+/* where each thread is, which the watchdog reports: the game's thread at
+ * work, waiting for the drawing's thread to take its picture, or waiting for
+ * a vsync, and the drawing's thread waiting or drawing */
+enum { GAME_WORKING, GAME_WAITING_DRAWING, GAME_WAITING_VSYNC };
+static volatile int game_phase, drawing_busy;
+static volatile unsigned long drawing_records;
+
 /* the drawing's thread, and the picture handed to it */
 LightLock sa3ds_engine_lock;
 static Thread drawing;
@@ -130,9 +137,12 @@ static void drawing_main(void *unused)
         if (drawing_quit) {
             break;
         }
+        drawing_busy = 1;
         LightLock_Lock(&sa3ds_engine_lock);
         draw_picture(picture, picture_bytes);
         LightLock_Unlock(&sa3ds_engine_lock);
+        drawing_busy = 0;
+        drawing_records++;
         LightEvent_Signal(&drawn);
     }
 }
@@ -144,7 +154,9 @@ static void give_picture(const uint8_t *records, size_t bytes)
     if (!drawing) {
         draw_picture(records, bytes);
     } else {
+        game_phase = GAME_WAITING_DRAWING;
         LightEvent_Wait(&drawn);
+        game_phase = GAME_WORKING;
         if (bytes > picture_room) {
             uint8_t *more = realloc(picture, bytes);
 
@@ -195,10 +207,58 @@ static void wait_vsync(void)
         return;
     }
     if (now < next_vsync) {
+        game_phase = GAME_WAITING_VSYNC;
         svcSleepThread((s64)((next_vsync - now) * 1000000000ULL /
                              SYSCLOCK_ARM11));
+        game_phase = GAME_WORKING;
     }
     sa3ds_ticks_wait += svcGetSystemTick() - now;
+}
+
+/* the watchdog: a console that stops in the game, with no fault, freezes
+ * whole, HOME and all, and leaves the log nothing. the watchdog wakes twice
+ * a second on the third core, above the drawing's thread, and where no
+ * vsync has come for WATCH_STALL seconds it logs where each thread was and
+ * the disc file last opened, again every WATCH_AGAIN seconds while it lasts */
+#define WATCH_STALL 3
+#define WATCH_AGAIN 10
+extern int game_mode;
+static Thread watchdog;
+
+static void watchdog_main(void *unused)
+{
+    static const char *const phases[] = {"at work", "waiting for the drawing's thread",
+                                         "waiting for a vsync"};
+    unsigned long seen = native_vsyncs, stalled = 0;
+
+    (void)unused;
+    for (;;) {
+        svcSleepThread(500000000LL);
+        if (native_vsyncs != seen) {
+            seen = native_vsyncs;
+            stalled = 0;
+            continue;
+        }
+        stalled++;
+        if (stalled == WATCH_STALL * 2 || (stalled > WATCH_STALL * 2 && stalled % (WATCH_AGAIN * 2) == 0)) {
+            native_log("sa3ds: no vsync for %lu s at vsync %lu, game_mode %d: the game's thread %s, "
+                       "the drawing's thread %s after %lu pictures, the last file opened %s",
+                       stalled / 2, seen, game_mode, phases[game_phase],
+                       drawing ? (drawing_busy ? "drawing" : "waiting") : "absent",
+                       drawing_records, native_last_opened);
+        }
+    }
+}
+
+static void open_watchdog(void)
+{
+    s32 priority = 0x30;
+
+    svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+    watchdog = threadCreate(watchdog_main, NULL, 16 * 1024, priority - 2, 2, true);
+    if (watchdog == NULL) {
+        watchdog = threadCreate(watchdog_main, NULL, 16 * 1024, priority - 2, 1, true);
+    }
 }
 
 static void read_pad(void *record)
@@ -270,6 +330,7 @@ void native_play_open(const char *disc, int recorded)
     if (sa3ds_drawing_thread) {
         open_drawing();
     }
+    open_watchdog();
     native_picture_sink = give_picture;
     native_pace = wait_vsync;
     /* a script of keys gives the pad in place of the buttons */
