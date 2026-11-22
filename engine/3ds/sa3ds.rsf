@@ -34,6 +34,14 @@ AccessControlInfo:
   FileSystemAccess:
     - DirectSdmc
   IoAccessControl:
+  # the kernel maps the DSP's memory, where ndsp reads and writes the audio
+  # chip's state, and VRAM, only for a title whose exheader names them, as
+  # devkitPro's template does. without the DSP's, the game's first sound was
+  # a data abort at 0x1ff57ffe on a console; Azahar maps both regardless
+  MemoryMapping:
+    - 0x1f000000-0x1f5fffff:r
+  IORegisterMapping:
+    - 0x1ff00000-0x1ff7ffff
   IdealProcessor          : 0
   AffinityMask            : 1
   Priority                : 16
