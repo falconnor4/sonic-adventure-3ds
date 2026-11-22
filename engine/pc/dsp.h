@@ -25,6 +25,7 @@ public:
     void load(const uint8_t *image, uint32_t words);
     void stop() { running_ = false; }
     bool running() const { return running_; }
+    uint32_t used() const { return used_; }
     /* step's coefficient as its AICA register holds it, 13 bits from bit 3 */
     void set_coefficient(uint32_t step, int16_t value);
     int16_t coefficient(uint32_t step) const { return coef_[step & 127]; }
@@ -42,6 +43,23 @@ private:
     };
 
     Step steps_[128] = {};
+    /* the steps run, in order, and their count: those that write what lasts,
+     * a temporary, the memory, the ring or an output, and those whose
+     * accumulator, FRC, Y, ADRS or read a later run step takes (load). the
+     * rest compute what nothing reads, as a program's empty steps do, and
+     * leaving them out changes nothing */
+    uint8_t order_[128] = {};
+    /* each step's flags, as one word, and its Y where it takes a
+     * coefficient, sign-extended, decoded at load for run */
+    enum : uint32_t {
+        IN_MEMS = 1, IN_MIXS = 2, IWT = 4, XSEL = 8, YRL = 16, TABLE = 32, MWT = 64,
+        MRD = 128, EWT = 256, ADRL = 512, FRCL = 1024, NEGB = 2048, ZERO = 4096,
+        BSEL = 8192, NOFL = 16384, ADREB = 32768
+    };
+    static constexpr uint32_t TWT = 1U << 16;
+    uint32_t flags_[128] = {};
+    int32_t ycoef_[128] = {};
+    uint32_t used_ = 0;
     int16_t coef_[128] = {};
     uint16_t madrs_[64] = {};
     int32_t temp_[128] = {};

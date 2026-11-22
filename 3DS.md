@@ -87,7 +87,7 @@ The SD card holds:
 | `shots N` or `shots N FROM` | write the top screen to `sa3ds/shots/` every N vsyncs, from vsync FROM if given |
 | `fps 30` | hold every frame at one picture (by default the game splits a frame into two pictures, 60 a second with its logic at 30, wherever the last frames show a split one fits) |
 | `aa 0` | draw the top screen without its 2x1 supersampling (on by default) |
-| `thread 1` | draw on a thread of its own on the New 3DS's third core (off by default: on a console that thread stopped for good inside a picture as Station Square loaded) |
+| `thread 1` or `thread 0` | draw on a thread of its own on the New 3DS's third core, or on the game's thread (by default a console draws on the third core, with the sound mixing on the system core, and Azahar, which runs that core slowly, on the game's thread) |
 
 The 3DS's A, B, X, Y, START and the D-pad are the Dreamcast pad's; L or ZL is
 the left trigger and R or ZR the right; the circle pad is the stick. HOME and
@@ -162,6 +162,15 @@ game's loader reads the program's file.
 | `draw.v.pica` | the vertex shader, with the stereoscopic eye shift |
 | `host/index.cpp` | the host's index of the disc's textures, `romfs:/textures.idx` |
 | `host/pack.cpp`, `host/etc1.h`, `texels.h` | the disc's textures as the GPU reads them, `romfs:/textures.gpu` |
+
+The sound mixes the Dreamcast's AICA: its voices, the ADX music and the DSP's
+128-step effects program (reverb and echo), at 44.1 kHz. The effects are
+about four fifths of the mixing's cost, more than a core's share in Azahar.
+The mixer runs only the DSP steps whose results something reads, and times
+each buffer it mixes: where mixing passes 90% of the buffer's playing time,
+the effects go and the voices and music play on, which keeps the sound from
+breaking up. They come back to try again after ten seconds, longer after
+each failure. The log names each time they go.
 
 The textures come ready from the host. `make` packs each texture of the index
 once (about a minute on all the host's cores): one at least 64 on each side

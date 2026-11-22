@@ -41,11 +41,12 @@ uint16_t pack(int32_t x)
 {
     uint32_t v = static_cast<uint32_t>(x) & 0xffffff;
     uint32_t s = v >> 23;
-    uint32_t shift = 0;
+    /* the bits below the sign that differ from it, from bit 22 down: the
+     * zeros that lead them are the run, counted at once */
+    uint32_t differ = (v ^ (0u - s)) & 0x7fffff;
+    uint32_t shift = differ ? static_cast<uint32_t>(__builtin_clz(differ << 9)) : 23;
 
-    while (shift < 12 && (v >> (22 - shift) & 1) == s) {
-        shift++;
-    }
+    shift = shift > 12 ? 12 : shift;
     uint32_t mantissa = shift < 12 ? v >> (11 - shift) & 0x7ff : v & 0x7ff;
 
     return static_cast<uint16_t>(s << 15 | shift << 11 | mantissa);
@@ -108,6 +109,51 @@ void Dsp::load(const uint8_t *image, uint32_t words)
         s.adreb = w3 >> 8 & 1;
         s.nxadr = w3 >> 7 & 1;
     }
+    /* which steps matter, from the last back. the accumulator, FRC, Y, ADRS
+     * and the memory's read start each sample anew, so a step matters where
+     * it writes what lasts or where a later step that matters reads what it
+     * leaves. a step reads the accumulator the step before left, through B
+     * or through SHIFTED where it writes; FRC and Y through its Y; ADRS in a
+     * memory access; and the read in IWT, each before it writes its own */
+    bool keep[128] = {};
+    bool live_acc = false, live_frc = false, live_y = false, live_adrs = false,
+         live_mem = false;
+
+    for (int i = 127; i >= 0; i--) {
+        const Step &s = steps_[i];
+        bool writes = s.twt || s.iwt || s.mwt || s.ewt;
+
+        keep[i] = writes || live_acc || (s.frcl && live_frc) || (s.yrl && live_y) ||
+                  (s.adrl && live_adrs) || (s.mrd && live_mem);
+        if (!keep[i]) {
+            /* it leaves the accumulator to none, and touches no register */
+            live_acc = false;
+            continue;
+        }
+        bool shifted = s.twt || s.frcl || s.mwt || s.ewt || (s.adrl && s.shift == 3);
+
+        live_acc = (!s.zero && s.bsel) || shifted;
+        live_frc = (s.frcl ? false : live_frc) || s.ysel == 0;
+        live_y = (s.yrl ? false : live_y) || s.ysel >= 2;
+        live_adrs = (s.adrl ? false : live_adrs) || (s.adreb && (s.mrd || s.mwt));
+        live_mem = (s.mrd ? false : live_mem) || s.iwt;
+    }
+    used_ = 0;
+    for (uint32_t i = 0; i < 128; i++) {
+        const Step &s = steps_[i];
+
+        if (keep[i]) {
+            order_[used_++] = static_cast<uint8_t>(i);
+        }
+        flags_[i] = static_cast<uint32_t>(
+            (s.ira < 0x20 ? IN_MEMS : s.ira < 0x30 ? IN_MIXS : 0) | (s.iwt ? IWT : 0) |
+            (s.xsel ? XSEL : 0) | (s.yrl ? YRL : 0) | (s.table ? TABLE : 0) |
+            (s.mwt ? MWT : 0) | (s.mrd ? MRD : 0) | (s.ewt ? EWT : 0) | (s.adrl ? ADRL : 0) |
+            (s.frcl ? FRCL : 0) | (s.negb ? NEGB : 0) | (s.zero ? ZERO : 0) |
+            (s.bsel ? BSEL : 0) | (s.nofl ? NOFL : 0) | (s.adreb ? ADREB : 0) |
+            (s.twt ? TWT : 0));
+        ycoef_[i] = sign(coef_[i] >> 3, 13);
+    }
     uint32_t size = RING_LEAST;
 
     while (size < words && size < RING) {
@@ -129,6 +175,7 @@ void Dsp::load(const uint8_t *image, uint32_t words)
 void Dsp::set_coefficient(uint32_t step, int16_t value)
 {
     coef_[step & 127] = value;
+    ycoef_[step & 127] = sign(value >> 3, 13);
 }
 
 void Dsp::send(uint32_t input, int32_t sample)
@@ -143,53 +190,58 @@ void Dsp::run(int32_t outputs[16])
 {
     int32_t acc = 0, frc = 0, yreg = 0, memval = 0;
     uint32_t adrs = 0;
+    const uint32_t dec = dec_;
 
     memset(outputs, 0, 16 * sizeof outputs[0]);
     if (!running_) {
         return;
     }
-    for (uint32_t i = 0; i < 128; i++) {
+    /* each step's choices come decoded from load, and the step reads them
+     * as one word of flags: on the ARM11 a step's bytes and branches cost
+     * more than its arithmetic */
+    for (uint32_t n = 0; n < used_; n++) {
+        const uint32_t i = order_[n];
         const Step &s = steps_[i];
+        const uint32_t f = flags_[i];
         int32_t inputs = 0;
 
-        if (s.ira < 0x20) {
+        if (f & IN_MEMS) {
             inputs = mems_[s.ira];
-        } else if (s.ira < 0x30) {
+        } else if (f & IN_MIXS) {
             int32_t m = mixs_[s.ira - 0x20];
 
             m = m > 0x7ffff ? 0x7ffff : m < -0x80000 ? -0x80000 : m;
             inputs = m * 16;
         }
-        if (s.iwt) {
+        if (f & IWT) {
             mems_[s.iwa] = memval;
             if (s.ira == s.iwa) {
                 inputs = memval;
             }
         }
-        int32_t temp = temp_[(s.tra + dec_) & 127];
-        int32_t b = s.zero ? 0 : s.bsel ? acc : temp;
-        int32_t x = s.xsel ? inputs : temp;
+        const int32_t temp = temp_[(s.tra + dec) & 127];
+        int32_t b = f & ZERO ? 0 : f & BSEL ? acc : temp;
+        const int32_t x = f & XSEL ? inputs : temp;
         int32_t y;
 
-        if (s.negb) {
+        if (f & NEGB) {
             b = -b;
         }
         switch (s.ysel) {
         case 0:
-            y = frc;
+            y = sign(frc, 13);
             break;
         case 1:
-            y = coef_[i] >> 3;
+            y = ycoef_[i];
             break;
         case 2:
-            y = yreg >> 11 & 0x1fff;
+            y = sign(yreg >> 11 & 0x1fff, 13);
             break;
         default:
             y = yreg >> 4 & 0xfff;
             break;
         }
-        y = sign(y, 13);
-        if (s.yrl) {
+        if (f & YRL) {
             yreg = inputs;
         }
         /* the accumulator the step before left, doubled where SHIFT is odd.
@@ -197,39 +249,35 @@ void Dsp::run(int32_t outputs[16])
         int32_t shifted = s.shift & 1 ? acc * 2 : acc;
 
         shifted = s.shift < 2 ? clamp24(shifted) : sign(shifted, 24);
-        acc = sign(static_cast<int32_t>(static_cast<int64_t>(x) * y >> 12) + b,
-                   26);
-        if (s.twt) {
-            temp_[(s.twa + dec_) & 127] = shifted;
+        acc = sign(static_cast<int32_t>(static_cast<int64_t>(x) * y >> 12) + b, 26);
+        if (f & TWT) {
+            temp_[(s.twa + dec) & 127] = shifted;
         }
-        if (s.frcl) {
+        if (f & FRCL) {
             frc = s.shift == 3 ? shifted & 0xfff : shifted >> 11 & 0x1fff;
         }
-        if (s.mrd || s.mwt) {
+        if (f & (MRD | MWT)) {
             uint32_t address = madrs_[s.masa];
 
-            if (!s.table) {
-                address += dec_;
+            if (!(f & TABLE)) {
+                address += dec;
             }
-            if (s.adreb) {
+            if (f & ADREB) {
                 address += adrs & 0xfff;
             }
             address += s.nxadr;
-            address &= s.table ? RING - 1 : ring_mask_;
-            if (s.mrd) {
-                memval = s.nofl ? sign(ring_[address] << 8, 24)
-                                : unpack(ring_[address]);
+            address &= f & TABLE ? RING - 1 : ring_mask_;
+            if (f & MRD) {
+                memval = f & NOFL ? sign(ring_[address] << 8, 24) : unpack(ring_[address]);
             }
-            if (s.mwt) {
-                ring_[address] = s.nofl ? static_cast<uint16_t>(shifted >> 8)
-                                        : pack(shifted);
+            if (f & MWT) {
+                ring_[address] = f & NOFL ? static_cast<uint16_t>(shifted >> 8) : pack(shifted);
             }
         }
-        if (s.adrl) {
-            adrs = static_cast<uint32_t>(s.shift == 3 ? shifted >> 12 & 0xfff
-                                                      : inputs >> 16);
+        if (f & ADRL) {
+            adrs = static_cast<uint32_t>(s.shift == 3 ? shifted >> 12 & 0xfff : inputs >> 16);
         }
-        if (s.ewt) {
+        if (f & EWT) {
             outputs[s.ewa] += shifted >> 8;
         }
     }

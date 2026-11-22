@@ -192,6 +192,11 @@ public:
     void render(int16_t *out, uint32_t frames);
     /* any thread */
     sa_pc_sound_stats stats() const;
+    /* bypass the DSP's effects, or take them again: a host that can't mix
+     * them in time leaves them out rather than let the sound break up. the
+     * voices' sends to the DSP go nowhere meanwhile */
+    void bypass_effects(bool bypass) { effects_bypassed_ = bypass; }
+    bool effects_bypassed() const { return effects_bypassed_; }
 
 private:
     bool push(const Entry &entry, const void *data, uint32_t bytes);
@@ -243,6 +248,7 @@ private:
     /* the DSP, the fx programs and outputs banks, and each output's level,
      * pan and gain each side */
     Dsp dsp_;
+    bool effects_bypassed_ = false;
     Place fx_programs_ = {}, fx_outputs_ = {};
     uint32_t driver_bytes_ = 0; /* the driver's size, at address 0 */
     FxOutput fx_[FX_OUTPUTS] = {};

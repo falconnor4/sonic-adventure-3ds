@@ -68,11 +68,12 @@ static uint8_t *picture;
 static size_t picture_bytes, picture_room;
 static volatile int drawing_quit, quit_asked;
 /* settings.txt's "thread 1" asks for the drawing's thread, on the New 3DS's
- * third core, and "thread 0" refuses it. without either the game's thread
- * draws: on a console the drawing's thread stopped for good inside a picture
- * as Station Square loaded, which the watchdog's report names, and Azahar
- * runs that core far slower than the first. -1 would choose by the host */
-int sa3ds_drawing_thread = 0;
+ * third core, and "thread 0" refuses it. without either a console draws on
+ * the third core, and Azahar, which runs that core far slower than the
+ * first, on the game's thread. (the drawing's thread once stopped as Station
+ * Square loaded: the sound's mixing, above it on the same core, took nearly
+ * all its time. the sound now mixes on the system core beside it) */
+int sa3ds_drawing_thread = -1;
 /* the top screen's 2x1 supersampling (backend.cpp), which settings.txt's
  * "aa 0" turns off */
 int sa3ds_antialias = 1;
@@ -342,6 +343,11 @@ void native_play_open(const char *disc, int recorded)
     sa_result result = sa_engine_memory(&desc, &bytes);
 
     (void)recorded;
+    /* the drawing's thread is chosen before the engine, whose sound takes the
+     * core the drawing leaves */
+    if (sa3ds_drawing_thread < 0) {
+        sa3ds_drawing_thread = !emulated();
+    }
     if (result == SA_OK) {
         memory = memalign(32, bytes);
     }
@@ -364,9 +370,6 @@ void native_play_open(const char *disc, int recorded)
     }
     next_vsync = svcGetSystemTick();
     LightLock_Init(&sa3ds_engine_lock);
-    if (sa3ds_drawing_thread < 0) {
-        sa3ds_drawing_thread = !emulated();
-    }
     if (sa3ds_drawing_thread) {
         open_drawing();
     }

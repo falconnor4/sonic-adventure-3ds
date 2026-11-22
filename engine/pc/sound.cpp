@@ -217,6 +217,37 @@ double decibels(double db)
     return pow(10.0, db / 20.0);
 }
 
+#ifdef SA_3DS
+/* the envelope's gain at a level, decibels(-level * 3 / 32), from a table of
+ * each whole level and a line between two: the ARM11 takes pow in software,
+ * and a voice asked it every sample, which with the DSP filled a core. the
+ * line is within some 1e-5 of the curve */
+float envelope_gain(double level)
+{
+    static float table[1026];
+    static bool made;
+
+    if (!made) {
+        for (uint32_t i = 0; i < 1026; i++) {
+            table[i] = static_cast<float>(decibels(-static_cast<double>(i) * 3.0 / 32.0));
+        }
+        made = true;
+    }
+    float at = static_cast<float>(level);
+
+    if (!(at > 0.0F)) {
+        return table[0];
+    }
+    if (at >= 1024.0F) {
+        return table[1024];
+    }
+    uint32_t i = static_cast<uint32_t>(at);
+    float f = at - static_cast<float>(i);
+
+    return table[i] + (table[i + 1] - table[i]) * f;
+}
+#endif
+
 /* the filter's damping by its resonance Q. the AICA documents a resonance of
  * -3 dB at 0, rising 0.75 dB a step. this curve gives the same at 4 and
  * 1.9 dB more at 31 */
@@ -995,8 +1026,15 @@ void Sound::lfo_frame(Voice &v, double &pitch, double &gain)
     };
     swing = v.pitch_depth ? wave(v.pitch_wave, true) : 0;
     fall = v.level_depth ? wave(v.level_wave, false) : 0;
+#ifdef SA_3DS
+    /* single precision's exp2f and expf, where the ARM11's double pow takes
+     * ten times as long, each sample of each voice under an LFO */
+    pitch = swing ? exp2f(static_cast<float>(swing * v.pitch_depth / 1200.0)) : 1;
+    gain = fall ? expf(static_cast<float>(-fall * v.level_depth * 0.11512925464970228)) : 1;
+#else
     pitch = swing ? pow(2.0, swing * v.pitch_depth / 1200.0) : 1;
     gain = fall ? decibels(-fall * v.level_depth) : 1;
+#endif
     v.lfo += v.lfo_step;
     if (v.lfo >= 1) {
         v.lfo -= 1;
@@ -1111,13 +1149,19 @@ void Sound::voice_frame(Voice &v, float &left, float &right)
     if (v.filtered) {
         x = filter_frame(v, x);
     }
+#ifdef SA_3DS
+    float out = x * v.gain * envelope_gain(v.level) * static_cast<float>(lfo_gain);
+#else
     float out = x * v.gain *
                 static_cast<float>(decibels(-v.level * 3.0 / 32.0) * lfo_gain);
+#endif
 
     left += out * v.direct_left;
     right += out * v.direct_right;
     if (v.send > 0) {
-        dsp_.send(v.input, static_cast<int32_t>(out * v.send * 32768.0F));
+        if (!effects_bypassed_) {
+            dsp_.send(v.input, static_cast<int32_t>(out * v.send * 32768.0F));
+        }
     }
     v.position += v.step * pitch;
 }
@@ -1496,6 +1540,16 @@ void Sound::qsound_place(uint32_t channel, uint32_t place)
     }
 }
 
+#ifdef SA_3DS
+/* the mixing's load since the log last read it: frames, voices played in
+ * them, and the DSP's steps run (engine/3ds/main.c). sa3ds_sound_test's bit
+ * 1 leaves the DSP out, a measure of its share */
+extern "C" {
+uint64_t sa3ds_mix_frames, sa3ds_mix_voices, sa3ds_mix_steps;
+int sa3ds_sound_test;
+}
+#endif
+
 void Sound::render(int16_t *out, uint32_t frames)
 {
     drain();
@@ -1510,6 +1564,9 @@ void Sound::render(int16_t *out, uint32_t frames)
         for (Voice &v : voices_) {
             if (v.on) {
                 voice_frame(v, left, right);
+#ifdef SA_3DS
+                sa3ds_mix_voices++;
+#endif
             }
         }
         for (Stream &s : streams_) {
@@ -1517,7 +1574,14 @@ void Sound::render(int16_t *out, uint32_t frames)
                 stream_frame(s, left, right);
             }
         }
-        if (dsp_.running()) {
+#ifdef SA_3DS
+        sa3ds_mix_frames++;
+        if (dsp_.running() && (sa3ds_sound_test & 1)) {
+            dsp_.stop();
+        }
+        sa3ds_mix_steps += dsp_.running() && !effects_bypassed_ ? dsp_.used() : 0;
+#endif
+        if (dsp_.running() && !effects_bypassed_) {
             int32_t fx[FX_OUTPUTS];
 
             dsp_.run(fx);

@@ -1026,6 +1026,48 @@ void audio_ready(void *data)
 /* the sound's thread: each buffer the DSP has played takes the next frames
  * the engine renders. it runs under round-to-nearest in the VFP's RunFast
  * mode, as the engine's calls do */
+/* the mixing's guard: each buffer's mixing time against the time it plays.
+ * a mix that takes over EFFECTS_FULL of it, averaged over some 8 buffers,
+ * can't keep up, and the sound would break up: the DSP's effects, the most
+ * of the mixing's cost by far, go, and the voices and the music play on. they
+ * come back after EFFECTS_RETRY seconds to try again. each retry that fails
+ * at once waits six times as long, to EFFECTS_LONGEST, a failed retry costing
+ * a moment of the sound's breaking up */
+constexpr float EFFECTS_FULL = 0.9F;
+constexpr uint64_t EFFECTS_RETRY = 10;
+constexpr uint64_t EFFECTS_LONGEST = 600;
+uint32_t effects_bypasses;
+
+void guard_mixing(Backend &b, uint64_t mixing_ticks)
+{
+    static float load;
+    static uint64_t back_at, tried_at, wait = EFFECTS_RETRY;
+    static bool retried;
+    const float buffer_ticks = (float)AUDIO_FRAMES * SYSCLOCK_ARM11 / SA_PC_SOUND_RATE;
+    uint64_t now = svcGetSystemTick();
+
+    load += ((float)mixing_ticks / buffer_ticks - load) / 8.0F;
+    if (!b.sound.effects_bypassed()) {
+        if (load > EFFECTS_FULL) {
+            /* where they failed soon after a retry, they wait longer */
+            bool soon = retried && now - tried_at < 5ULL * SYSCLOCK_ARM11;
+
+            wait = soon ? std::min(wait * 6, EFFECTS_LONGEST) : EFFECTS_RETRY;
+            b.sound.bypass_effects(true);
+            back_at = now + wait * SYSCLOCK_ARM11;
+            effects_bypasses++;
+            retried = false;
+            fprintf(stderr, "engine: the sound's effects off, its mixing at %d%% of its time\n",
+                    (int)(load * 100.0F));
+        }
+    } else if (now >= back_at) {
+        b.sound.bypass_effects(false);
+        tried_at = now;
+        retried = true;
+        load = 0.0F;
+    }
+}
+
 void audio_main(void *data)
 {
     Backend &b = *static_cast<Backend *>(data);
@@ -1041,7 +1083,9 @@ void audio_main(void *data)
             uint64_t mixing = svcGetSystemTick();
 
             b.sound.render(wave.data_pcm16, AUDIO_FRAMES);
-            sa3ds_ticks_audio += svcGetSystemTick() - mixing;
+            mixing = svcGetSystemTick() - mixing;
+            sa3ds_ticks_audio += mixing;
+            guard_mixing(b, mixing);
             for (uint32_t i = 0; i < AUDIO_FRAMES * 2; i++) {
                 int v = wave.data_pcm16[i] < 0 ? -wave.data_pcm16[i] : wave.data_pcm16[i];
 

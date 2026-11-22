@@ -200,10 +200,17 @@ void native_vsync(void)
 
             native_log("sa3ds: the GPU's command buffer at most %d%% full, %lu batches dropped",
                        (int)(peak * 100.0F), (unsigned long)dropped);
-            native_log("sa3ds: the sound's mixing took %.1f%% of a core",
+            extern uint64_t sa3ds_mix_frames, sa3ds_mix_voices, sa3ds_mix_steps;
+
+            native_log("sa3ds: the sound's mixing took %.1f%% of a core: %llu frames, %.1f voices "
+                       "and %.0f DSP steps a frame",
                        sa3ds_ticks_all ? 100.0 * (double)sa3ds_ticks_audio / (double)sa3ds_ticks_all
-                                       : 0.0);
+                                       : 0.0,
+                       (unsigned long long)sa3ds_mix_frames,
+                       sa3ds_mix_frames ? (double)sa3ds_mix_voices / (double)sa3ds_mix_frames : 0.0,
+                       sa3ds_mix_frames ? (double)sa3ds_mix_steps / (double)sa3ds_mix_frames : 0.0);
             sa3ds_ticks_audio = 0;
+            sa3ds_mix_frames = sa3ds_mix_voices = sa3ds_mix_steps = 0;
         }
             sa3ds_ticks_begin = 0;
         }
@@ -382,6 +389,10 @@ static void read_settings(void)
             extern int sa3ds_fps;
 
             sa3ds_fps = n == 60 ? 60 : 30;
+        } else if (sscanf(line, "soundtest %d", &n) == 1) {
+            extern int sa3ds_sound_test;
+
+            sa3ds_sound_test = n;
         } else if (sscanf(line, "aa %d", &n) == 1) {
             extern int sa3ds_antialias;
 
