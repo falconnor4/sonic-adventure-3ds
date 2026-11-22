@@ -47,6 +47,12 @@ extern "C" uint64_t sa3ds_ticks_begin, sa3ds_ticks_render;
 extern "C" volatile int sa3ds_draw_step;
 volatile int sa3ds_draw_step;
 extern "C" volatile int sa3ds_texture_step, sa3ds_audio_busy;
+/* the ticks the sound's mixing took since the log last read them (main.c),
+ * and the drawing's thread's choice (front.c), which the sound's core
+ * follows */
+extern "C" volatile uint64_t sa3ds_ticks_audio;
+volatile uint64_t sa3ds_ticks_audio;
+extern "C" int sa3ds_drawing_thread;
 /* the lock the drawing's thread holds, which a storage call from the game's
  * thread takes too (front.c) */
 extern "C" LightLock sa3ds_engine_lock;
@@ -1032,7 +1038,10 @@ void audio_main(void *data)
             if (wave.status != NDSP_WBUF_FREE && wave.status != NDSP_WBUF_DONE) {
                 continue;
             }
+            uint64_t mixing = svcGetSystemTick();
+
             b.sound.render(wave.data_pcm16, AUDIO_FRAMES);
+            sa3ds_ticks_audio += svcGetSystemTick() - mixing;
             for (uint32_t i = 0; i < AUDIO_FRAMES * 2; i++) {
                 int v = wave.data_pcm16[i] < 0 ? -wave.data_pcm16[i] : wave.data_pcm16[i];
 
@@ -1084,18 +1093,36 @@ void open_sound(Backend &b)
     LightEvent_Init(&b.audio_due, RESET_ONESHOT);
     ndspSetCallback(audio_ready, &b);
     b.sound_made = true;
-    /* the New 3DS's third core, which the game's thread leaves free; else
-     * the system core at a share of its time; else the game's own */
+    /* the New 3DS's third core, which the game's thread leaves free, where
+     * the game's thread draws. where the drawing's thread takes that core,
+     * the system core, at the most of its time an application may have: on
+     * the third core the sound, above the drawing's thread and mixing nearly
+     * all the time, left the drawing a record a second, and Station Square's
+     * load never ended. else the game's own core */
     s32 priority = 0x30;
+    bool system_first = sa3ds_drawing_thread != 0;
+
+    int core = -1;
 
     svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
-    b.audio = threadCreate(audio_main, &b, 32 * 1024, priority - 1, 2, false);
-    if (b.audio == nullptr && R_SUCCEEDED(APT_SetAppCpuTimeLimit(30))) {
-        b.audio = threadCreate(audio_main, &b, 32 * 1024, priority - 1, 1, false);
+    b.audio = nullptr;
+    if (system_first && R_SUCCEEDED(APT_SetAppCpuTimeLimit(80)) &&
+        (b.audio = threadCreate(audio_main, &b, 32 * 1024, priority - 1, 1, false)) != nullptr) {
+        core = 1;
     }
-    if (b.audio == nullptr) {
-        b.audio = threadCreate(audio_main, &b, 32 * 1024, priority - 1, -2, false);
+    if (b.audio == nullptr &&
+        (b.audio = threadCreate(audio_main, &b, 32 * 1024, priority - 1, 2, false)) != nullptr) {
+        core = 2;
     }
+    if (b.audio == nullptr && R_SUCCEEDED(APT_SetAppCpuTimeLimit(30)) &&
+        (b.audio = threadCreate(audio_main, &b, 32 * 1024, priority - 1, 1, false)) != nullptr) {
+        core = 1;
+    }
+    if (b.audio == nullptr &&
+        (b.audio = threadCreate(audio_main, &b, 32 * 1024, priority - 1, -2, false)) != nullptr) {
+        core = 0;
+    }
+    fprintf(stderr, "engine: the sound's mixing on core %d\n", core);
     if (b.audio == nullptr) {
         fprintf(stderr, "engine: no thread for the sound\n");
         ndspSetCallback(nullptr, nullptr);
@@ -1573,8 +1600,18 @@ bool sixty()
         held -= held > 0;
         return split;
     }
-    bool wanted = split ? busy_avg < SIXTY_LEAVE * frame
-                        : busy_avg + SIXTY_COST * draw_avg < SIXTY_ENTER * frame;
+    /* on one thread a frame's drawing adds to its busy time. on the drawing's
+     * thread the two run side by side, the game's thread waiting for the
+     * drawing only where it lags, so a frame fits where the larger fits */
+    bool wanted;
+
+    if (sa3ds_drawing_thread) {
+        wanted = split ? std::max(busy_avg, draw_avg) < SIXTY_LEAVE * frame
+                       : std::max(busy_avg, SIXTY_COST * draw_avg) < SIXTY_ENTER * frame;
+    } else {
+        wanted = split ? busy_avg < SIXTY_LEAVE * frame
+                       : busy_avg + SIXTY_COST * draw_avg < SIXTY_ENTER * frame;
+    }
 
     if (wanted != split) {
         split = wanted;

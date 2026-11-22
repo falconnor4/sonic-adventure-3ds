@@ -173,12 +173,19 @@ void native_vsync(void)
             sa3ds_ticks_all;
         double ms = 1000.0 / SYSCLOCK_ARM11 / 600.0;
 
+        /* where the drawing's thread draws, its time is its own core's, and
+         * the game's thread's waits for it count among the waits */
+        extern int sa3ds_drawing_thread;
+        uint64_t drawn_here = sa3ds_drawing_thread ? 0 : sa3ds_ticks_give;
+        uint64_t spent = drawn_here + sa3ds_ticks_wait;
+
         native_log("sa3ds: a vsync's %.2f ms: the game %.2f, records and scene "
-                   "%.2f, the GPU's submission %.2f, waiting %.2f",
+                   "%.2f, the GPU's submission %.2f, waiting %.2f%s",
                    sa3ds_ticks_all * ms,
-                   (sa3ds_ticks_all - sa3ds_ticks_give - sa3ds_ticks_wait) * ms,
+                   (sa3ds_ticks_all > spent ? sa3ds_ticks_all - spent : 0) * ms,
                    (sa3ds_ticks_give - sa3ds_ticks_render) * ms,
-                   sa3ds_ticks_render * ms, sa3ds_ticks_wait * ms);
+                   sa3ds_ticks_render * ms, sa3ds_ticks_wait * ms,
+                   sa3ds_drawing_thread ? " (the drawing on the third core)" : "");
         {
             extern uint64_t sa3ds_ticks_begin;
 
@@ -189,8 +196,14 @@ void native_vsync(void)
             uint32_t dropped = 0;
             float peak = sa3ds_cmdbuf_peak(&dropped);
 
+            extern volatile uint64_t sa3ds_ticks_audio;
+
             native_log("sa3ds: the GPU's command buffer at most %d%% full, %lu batches dropped",
                        (int)(peak * 100.0F), (unsigned long)dropped);
+            native_log("sa3ds: the sound's mixing took %.1f%% of a core",
+                       sa3ds_ticks_all ? 100.0 * (double)sa3ds_ticks_audio / (double)sa3ds_ticks_all
+                                       : 0.0);
+            sa3ds_ticks_audio = 0;
         }
             sa3ds_ticks_begin = 0;
         }

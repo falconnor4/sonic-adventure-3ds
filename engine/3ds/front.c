@@ -172,9 +172,14 @@ static void give_picture(const uint8_t *records, size_t bytes)
     if (!drawing) {
         draw_picture(records, bytes);
     } else {
+        uint64_t waited = svcGetSystemTick();
+
         game_phase = GAME_WAITING_DRAWING;
         LightEvent_Wait(&drawn);
         game_phase = GAME_WORKING;
+        waited = svcGetSystemTick() - waited;
+        sa3ds_ticks_wait += waited;
+        sa3ds_ticks_wait_ever += waited;
         if (bytes > picture_room) {
             uint8_t *more = realloc(picture, bytes);
 
