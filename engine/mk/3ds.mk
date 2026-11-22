@@ -362,11 +362,14 @@ $(3DS_IMAGE): $(3DS_ELF) $(3DS_DIR)/sa3ds.smdh $(3DS_ROMFS)/symbols.bin $(3DS_RO
 	@$(call status,3dsx,$@)
 	$(Q)$(3DS_TOOLS)/3dsxtool $< $@ --smdh=$(3DS_DIR)/sa3ds.smdh --romfs=$(3DS_ROMFS)
 
-# the icon the HOME Menu and the Homebrew Launcher show: the disc's label
+# the icon the HOME Menu and the Homebrew Launcher show: the disc's label,
+# flagged (0x1000 at 0x2028) a New 3DS title, which an Old 3DS refuses
 $(3DS_DIR)/sa3ds.smdh: $(3DS_ART)/icon.png | $(3DS_DIR)
 	@$(call status,smdh,$@)
 	$(Q)$(3DS_TOOLS)/smdhtool --create "Sonic Adventure" \
-		"Sonic Adventure for the New 3DS" "SEGA" $< $@
+		"Sonic Adventure for the New 3DS" "SEGA" $< $@.tmp
+	$(Q)python3 -c 'import sys; d = bytearray(open(sys.argv[1], "rb").read()); d[0x2029] |= 0x10; open(sys.argv[1], "wb").write(d)' $@.tmp
+	$(Q)mv $@.tmp $@
 
 ## link the 3DS game's .3dsx, from the disc
 3ds-image: $(3DS_IMAGE)
