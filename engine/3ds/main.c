@@ -438,13 +438,20 @@ const int native_disc_sum_count = 0;
 
 /* libctru's split of the application's memory past the image: it keeps 32
  * MB of linear memory for the GPU by default, where this program's textures,
- * vertices, framebuffers and sound take some 10 MB in a stage, and gives the rest to the
- * heap, which SA1's client reads the disc's texture files into */
+ * vertices, framebuffers and sound lie, and gives the rest to the heap,
+ * which SA1's client reads the disc's texture files into. this is the least
+ * linear heap: __system_allocateHeaps gives it all but HEAP_KEPT */
 u32 __ctru_linear_heap_size = 12U << 20;
 
 /* the memory the game needs past its image, heap and linear: under it the
  * console has started the game in a smaller mode */
 #define HEAP_NEEDED (40U << 20)
+
+/* the heap a stage keeps past the linear heap: the rest of the 124 MB goes
+ * to the linear heap, the textures'. 12 MB left Station Square's road and
+ * walls without textures, as the linear heap ran out under them, where the
+ * heap held 27 MB in use of 61 MB */
+#define HEAP_KEPT (48U << 20)
 
 /* libctru's, which this takes the place of: the heap and the linear heap
  * from the application's memory past the image. libctru's stops the program
@@ -475,6 +482,8 @@ void __system_allocateHeaps(void)
     if (free < __ctru_linear_heap_size + HEAP_NEEDED) {
         short_of_memory = 1;
         __ctru_linear_heap_size = (free / 2) & ~0xfffU;
+    } else if (free > __ctru_linear_heap_size + HEAP_KEPT) {
+        __ctru_linear_heap_size = (free - HEAP_KEPT) & ~0xfffU;
     }
     __ctru_heap_size = free - __ctru_linear_heap_size;
     __ctru_heap = OS_HEAP_AREA_BEGIN;
