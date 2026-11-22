@@ -187,19 +187,27 @@ void native_vsync(void)
                    sa3ds_ticks_render * ms, sa3ds_ticks_wait * ms,
                    sa3ds_drawing_thread ? " (the drawing on the third core)" : "");
         {
-            extern uint64_t sa3ds_ticks_begin;
+            /* the GPU's submission by part (backend.cpp) */
+            extern uint64_t sa3ds_ticks_begin, sa3ds_ticks_parts[5];
 
-            native_log("sa3ds: of which C3D_FrameBegin %.2f",
-                       sa3ds_ticks_begin * ms);
+            native_log("sa3ds: of which C3D_FrameBegin %.2f, the scene's end %.2f, placing the "
+                       "corners %.2f, flushing them %.2f, the batches %.2f, C3D_FrameEnd %.2f",
+                       sa3ds_ticks_begin * ms, sa3ds_ticks_parts[0] * ms,
+                       sa3ds_ticks_parts[1] * ms, sa3ds_ticks_parts[2] * ms,
+                       sa3ds_ticks_parts[3] * ms, sa3ds_ticks_parts[4] * ms);
+            sa3ds_ticks_begin = 0;
+            memset(sa3ds_ticks_parts, 0, sizeof sa3ds_ticks_parts);
+        }
         {
             extern float sa3ds_cmdbuf_peak(uint32_t *dropped);
             uint32_t dropped = 0;
             float peak = sa3ds_cmdbuf_peak(&dropped);
 
-            extern volatile uint64_t sa3ds_ticks_audio;
-
             native_log("sa3ds: the GPU's command buffer at most %d%% full, %lu batches dropped",
                        (int)(peak * 100.0F), (unsigned long)dropped);
+        }
+        {
+            extern volatile uint64_t sa3ds_ticks_audio;
             extern uint64_t sa3ds_mix_frames, sa3ds_mix_voices, sa3ds_mix_steps;
 
             native_log("sa3ds: the sound's mixing took %.1f%% of a core: %llu frames, %.1f voices "
@@ -217,8 +225,6 @@ void native_vsync(void)
             extern void sa3ds_load_report(const char *what, uint64_t span);
 
             sa3ds_load_report("loads among the vsyncs of", sa3ds_ticks_all);
-        }
-            sa3ds_ticks_begin = 0;
         }
         sa3ds_ticks_give = sa3ds_ticks_render = sa3ds_ticks_wait = 0;
         sa3ds_ticks_all = 0;

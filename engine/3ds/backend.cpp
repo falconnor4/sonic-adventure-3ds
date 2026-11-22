@@ -51,6 +51,11 @@ extern "C" volatile int sa3ds_texture_step, sa3ds_audio_busy;
  * and the drawing's thread's choice (front.c), which the sound's core
  * follows */
 extern "C" volatile uint64_t sa3ds_ticks_audio;
+/* the GPU's submission, by part, since the log last read it (main.c): the
+ * scene's end, its blend list's sort among it, the corners' places, the
+ * cache's flush of them, the batches' state and draws, and C3D_FrameEnd */
+extern "C" uint64_t sa3ds_ticks_parts[5];
+uint64_t sa3ds_ticks_parts[5];
 volatile uint64_t sa3ds_ticks_audio;
 extern "C" int sa3ds_drawing_thread;
 /* the lock the drawing's thread holds, which a storage call from the game's
@@ -599,6 +604,7 @@ void render(Backend &b)
     C3D_FrameBegin(0);
     sa3ds_draw_step = 3;
     sa3ds_ticks_begin += svcGetSystemTick() - begin_at;
+    uint64_t part_at = svcGetSystemTick();
     /* the GPU has drawn the last picture, so what it read may go */
     for (uint32_t index : b.dying_textures) {
         C3D_TexDelete(&b.textures[index - 1].tex);
@@ -645,7 +651,11 @@ void render(Backend &b)
     uint32_t drop = sent;
 
     sent = backdrop(b, sent);
+    sa3ds_ticks_parts[1] += svcGetSystemTick() - part_at;
+    part_at = svcGetSystemTick();
     GSPGPU_FlushDataCache(b.corners, sent * sizeof(Corner));
+    sa3ds_ticks_parts[2] += svcGetSystemTick() - part_at;
+    part_at = svcGetSystemTick();
 
     /* the 3D slider: at 0 the left eye's picture alone, which the screen
      * shows to both */
@@ -678,7 +688,10 @@ void render(Backend &b)
     draw_batches(b, under, 0.0F);
     sa3ds_draw_step = 6;
     cmdbuf_peak = std::max(cmdbuf_peak, C3D_GetCmdBufUsage());
+    sa3ds_ticks_parts[3] += svcGetSystemTick() - part_at;
+    part_at = svcGetSystemTick();
     C3D_FrameEnd(0);
+    sa3ds_ticks_parts[4] += svcGetSystemTick() - part_at;
     sa3ds_draw_step = 7;
 }
 
@@ -1577,7 +1590,10 @@ sa_result sa_present_end(sa_engine *engine)
     uint64_t began = svcGetSystemTick();
 
     sa3ds_draw_step = 1;
+    uint64_t ended = svcGetSystemTick();
+
     b.scene.finish();
+    sa3ds_ticks_parts[0] += svcGetSystemTick() - ended;
     render(b);
     sa3ds_draw_step = 0;
     sa3ds_ticks_render += svcGetSystemTick() - began;
