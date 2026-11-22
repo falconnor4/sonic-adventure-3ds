@@ -466,12 +466,27 @@ $(3DS_ART)/banner.bnr: $(BANNERTOOL) $(3DS_ART)/banner.png $(3DS_ART)/banner.wav
 $(3DS_CIA_ELF): $(3DS_ELF)
 	$(Q)$(3DS_OBJCOPY) --wildcard -R 'sa1_data_*' -R 'sa1_bss_*' -R '.rel*' -R '.debug*' $< $@
 
+# the CIA's RomFS: the image's, and the disc's files under disc/, which the
+# runner reads in place of the SD card's (engine/3ds/main.c). the files link
+# to the disc's where the file system allows, so nothing a gigabyte long is
+# copied. the .gdi's tracks stay out: the game reads the files alone
+3DS_CIA_ROMFS := $(3DS_DIR)/romfs-cia
+$(3DS_DIR)/romfs-cia.txt: $(3DS_ROMFS)/symbols.bin $(3DS_ROMFS)/programs.txt $(3DS_ROMFS)/textures.idx \
+		$(NATIVE_DISC)/1ST_READ.BIN
+	@$(call status,romfs,$(3DS_CIA_ROMFS))
+	$(Q)rm -rf $(3DS_CIA_ROMFS) && mkdir -p $(3DS_CIA_ROMFS)/disc
+	$(Q)cp -al $(3DS_ROMFS)/. $(3DS_CIA_ROMFS)/ 2>/dev/null || cp -a $(3DS_ROMFS)/. $(3DS_CIA_ROMFS)/
+	$(Q)cd $(NATIVE_DISC) && find . -type f ! -name 'track*' ! -iname '*.gdi' -print0 | \
+		xargs -0 sh -c 'cp -al --parents "$$@" $(abspath $(3DS_CIA_ROMFS))/disc 2>/dev/null || \
+			cp -a --parents "$$@" $(abspath $(3DS_CIA_ROMFS))/disc' copy
+	$(Q)touch $@
+
 3DS_CIA := $(3DS_DIR)/sa3ds.cia
 $(3DS_CIA): $(3DS_CIA_ELF) $(MAKEROM) engine/3ds/sa3ds.rsf $(3DS_DIR)/sa3ds.smdh $(3DS_ART)/banner.bnr \
-		$(3DS_ROMFS)/symbols.bin $(3DS_ROMFS)/programs.txt $(3DS_ROMFS)/textures.idx
+		$(3DS_DIR)/romfs-cia.txt
 	@$(call status,cia,$@)
 	$(Q)$(MAKEROM) -f cia -o $@ -elf $< -rsf engine/3ds/sa3ds.rsf -icon $(3DS_DIR)/sa3ds.smdh \
-		-banner $(3DS_ART)/banner.bnr -DROMFS=$(abspath $(3DS_ROMFS)) -target t -exefslogo 2>&1 | \
+		-banner $(3DS_ART)/banner.bnr -DROMFS=$(abspath $(3DS_CIA_ROMFS)) -target t -exefslogo 2>&1 | \
 		grep -v 'Failed to sign' || true
 	$(Q)[ -s $@ ] || { echo "$@: makerom made no CIA"; exit 1; }
 

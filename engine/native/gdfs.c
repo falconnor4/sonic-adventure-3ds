@@ -85,7 +85,10 @@ static int find_nocase(const char *name, char *out, size_t size)
 {
     char path[512];
 
-    snprintf(path, sizeof path, "%s/%s", native_disc, directory);
+    /* the root takes no slash after the disc's directory: the 3DS's RomFS
+     * opens no "dir/" */
+    snprintf(path, sizeof path, directory[0] ? "%s/%s" : "%s%s", native_disc,
+             directory);
     return entry_nocase(path, name, out, size);
 }
 

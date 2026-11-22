@@ -33,8 +33,10 @@ The CIA takes makerom (Project_CTR's) and bannertool (carstene1ns's fork),
 which nixpkgs doesn't package: `make 3ds-cia` fetches each release's Linux
 build into `tools/3ds-tools/`, checks it by its sum, and on NixOS patches its
 loader with patchelf, so run it in `nix-shell`. The CIA's exheader asks for the
-New 3DS's 124 MB, 804 MHz and L2 cache (`engine/3ds/sa3ds.rsf`). Installed or
-not, the game reads its disc from the SD card.
+New 3DS's 124 MB, 804 MHz and L2 cache (`engine/3ds/sa3ds.rsf`). The CIA also
+carries the disc's files in its RomFS, about 1.1 GB in all, so it needs nothing
+on the SD card but the DSP's firmware; the game reads `romfs:/disc` where it is
+there, and else the SD card's `sa3ds/disc/`, as the `.3dsx` does.
 
 ## Running it
 
@@ -43,7 +45,7 @@ The SD card holds:
 | Path | What |
 |---|---|
 | `3ds/sa3ds.3dsx` | the game, which the Homebrew Launcher lists (not needed with the CIA installed) |
-| `sa3ds/disc/` | the disc's files: `1ST_READ.BIN`, `SONICADV/` and the rest |
+| `sa3ds/disc/` | the disc's files: `1ST_READ.BIN`, `SONICADV/` and the rest (not needed with the CIA) |
 | `3ds/dspfirm.cdc` | the DSP's firmware, which DSP1 dumps; without it the game is silent |
 | `sa3ds/card.bin` | the memory card, which the game makes on its first run |
 | `sa3ds/game.log` | the run's log |

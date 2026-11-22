@@ -25,6 +25,8 @@
 #define ROOT "sdmc:/sa3ds"
 #define LOG_PATH ROOT "/game.log"
 #define DISC_ROOT ROOT "/disc"
+/* the disc a CIA may carry in its RomFS, which the build puts there */
+#define ROMFS_DISC "romfs:/disc"
 #define CARD_PATH ROOT "/card.bin"
 /* the game's main thread's stack, as the PC's runner gives it 16 MB: the
  * game's frames are the SH-4's, and the engine's run on it too */
@@ -373,10 +375,18 @@ int main(int argc, char **argv)
     native_log("sa3ds: start, romfs %08lx", (unsigned long)romfs);
     catch_faults();
     read_settings();
+    /* a CIA that carries the disc in its RomFS reads it there; else the
+     * disc lies on the SD card */
+    native_disc = ROMFS_DISC;
     if (!(first = native_disc_file("1ST_READ.BIN"))) {
+        native_disc = DISC_ROOT;
+        first = native_disc_file("1ST_READ.BIN");
+    }
+    if (!first) {
         refuse("no disc at sdmc:/sa3ds/disc: copy the disc's files there, "
                "1ST_READ.BIN and SONICADV/ among them");
     }
+    native_log("sa3ds: the disc at %s", native_disc);
     fclose(first);
     native_card_open(CARD_PATH);
     native_threads_reserve();
