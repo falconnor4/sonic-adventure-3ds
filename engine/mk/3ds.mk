@@ -46,8 +46,10 @@ TARGET_CXX := $(3DS_BIN)g++
 3DS_READELF := $(3DS_BIN)readelf
 3DS_TOOLS   := $(DEVKITPRO)/tools/bin
 # ARMv6K, the ARM11 MPCore, VFPv2 with no NEON: the New 3DS's four cores at
-# 804 MHz, and the old 3DS's arrangement alike
-3DS_ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mfpu=vfp -marm -mtp=soft
+# 804 MHz, and the old 3DS's arrangement alike. a char is signed, as SHC's
+# and the PC's are, where ARM's own is unsigned: the game and the engine
+# test a char's sign
+3DS_ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mfpu=vfp -marm -mtp=soft -fsigned-char
 # the game's RAM, where rambase.py moves the game's 0x0c000000 and its views,
 # and the bytes of it: the linker script reserves them as BSS past the image
 3DS_RAM := 0x02000000

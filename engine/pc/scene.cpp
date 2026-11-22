@@ -622,7 +622,9 @@ void Scene::placed(const sa_sprite &s, uint32_t texture)
     if (screen) {
         state.flags |= BATCH_SCREEN;
 #ifdef SA_3DS
-        state.flags |= BATCH_SPRITE_2D;
+        if (s.flags & SA_SPRITE_HUD) {
+            state.flags |= BATCH_SPRITE_2D;
+        }
 #endif
     }
     if (facing) {

@@ -430,7 +430,11 @@ enum {
     SA_SPRITE_VFLIP = 0x08,
     SA_SPRITE_SCALE = 0x10,
     SA_SPRITE_ALPHA = 0x20,
-    SA_SPRITE_SCREEN = 0x40
+    SA_SPRITE_SCREEN = 0x40,
+    /* a screen sprite the game pins to an edge of the screen, as its HUD's
+     * counters are (src/system/port.h's port_wide_anchor). a backend with a
+     * second screen may show it there */
+    SA_SPRITE_HUD = 0x80
 };
 typedef struct sa_sprite {
     sa_record_head head;

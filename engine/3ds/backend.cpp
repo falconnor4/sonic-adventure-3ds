@@ -75,13 +75,11 @@ constexpr float STEREO_CONVERGENCE = 30.0F;
 /* the bottom screen, 320 by 240, as its framebuffer holds it turned */
 constexpr int BOTTOM_W = 320;
 constexpr int BOTTOM_H = 240;
-/* in play, the HUD's counters move to the bottom screen: a 2D draw that lies
- * whole within HUD_W pixels of the picture's left or right and HUD_H of its
- * top or bottom, the picture's 640 by 480, keeps its corner there, at
- * HUD_SCALE bottom pixels to the picture's. the top screen shows a picture's
- * pixel at 0.625, so they show 1.6 times as large */
-constexpr float HUD_W = 200.0F;
-constexpr float HUD_H = 130.0F;
+/* in play, the HUD moves to the bottom screen: each sprite the game pins to
+ * an edge (SA_SPRITE_HUD) keeps its corner of the picture, the picture's 640
+ * by 480, at HUD_SCALE bottom pixels to the picture's. the top screen shows a
+ * picture's pixel at 0.625, so they show 1.6 times as large. the rest of the
+ * 2D, a tally's or a menu's, stays on the top screen where the game drew it */
 constexpr float HUD_SCALE = 1.0F;
 /* the sound's buffers on the DSP, and the frames of two samples each holds:
  * four of 1024 frames keep some 90 ms ahead of the DSP */
@@ -420,27 +418,6 @@ bool in_play()
     return game_mode == 4 || game_mode == 5 || game_mode == 9;
 }
 
-/* whether a 2D triangle is one of the HUD's counters, by its corners'
- * bounds. a batch may join the counters of two corners, so each triangle
- * goes alone */
-bool hud(const pc::Vertex *corners)
-{
-    float x0 = 1e9F, y0 = 1e9F, x1 = -1e9F, y1 = -1e9F;
-
-    for (uint32_t i = 0; i < 3; i++) {
-        const pc::Vertex &v = corners[i];
-
-        x0 = v.at[0] < x0 ? v.at[0] : x0;
-        x1 = v.at[0] > x1 ? v.at[0] : x1;
-        y0 = v.at[1] < y0 ? v.at[1] : y0;
-        y1 = v.at[1] > y1 ? v.at[1] : y1;
-    }
-    bool across = x1 <= HUD_W || x0 >= 640.0F - HUD_W;
-    bool down = y1 <= HUD_H || y0 >= 480.0F - HUD_H;
-
-    return across && down;
-}
-
 /* a HUD corner on the bottom screen: kept at its corner of the picture,
  * HUD_SCALE as large, in the bottom screen's clip space */
 inline void place_bottom(const pc::Vertex &v, bool right, bool lower, Corner &out)
@@ -599,30 +576,18 @@ void render(Backend &b)
             break;
         }
         if (screen && play && (batch.state.flags & pc::BATCH_SPRITE_2D)) {
-            /* each triangle to its screen, runs of one screen together */
+            /* the HUD's, to the bottom screen: each triangle keeps the
+             * corner of the picture its middle lies nearest */
             for (uint32_t i = 0; i + 2 < batch.count; i += 3) {
                 const pc::Vertex *tri = &vertices[batch.first + i];
-                bool below = hud(tri);
-                std::vector<Placed> &list = below ? under : top;
+                float x = (tri[0].at[0] + tri[1].at[0] + tri[2].at[0]) / 3.0F;
+                float y = (tri[0].at[1] + tri[1].at[1] + tri[2].at[1]) / 3.0F;
 
-                if (below) {
-                    bool right = tri[0].at[0] > 320.0F, lower = tri[0].at[1] > 240.0F;
-
-                    for (uint32_t k = 0; k < 3; k++) {
-                        place_bottom(tri[k], right, lower, b.corners[sent + i + k]);
-                    }
-                } else {
-                    for (uint32_t k = 0; k < 3; k++) {
-                        place(tri[k], true, u.view, b.lens, b.corners[sent + i + k]);
-                    }
-                }
-                if (!list.empty() && list.back().batch == &batch &&
-                    list.back().first + list.back().count == sent + i) {
-                    list.back().count += 3;
-                } else {
-                    list.push_back(Placed{&batch, sent + i, 3});
+                for (uint32_t k = 0; k < 3; k++) {
+                    place_bottom(tri[k], x > 320.0F, y > 240.0F, b.corners[sent + i + k]);
                 }
             }
+            under.push_back(Placed{&batch, sent, batch.count / 3 * 3});
         } else {
             for (uint32_t i = 0; i < batch.count; i++) {
                 place(vertices[batch.first + i], screen, u.view, b.lens,

@@ -44,8 +44,8 @@ constexpr uint32_t BATCH_NEAR = 256;
 /* the 3DS's: a facing sprite in the world, which the scene places in
  * pixels as it does the screen's own draws */
 constexpr uint32_t BATCH_FACING = 512;
-/* the 3DS's: a 2D sprite of the screen's own, as the HUD draws its counters,
- * apart from the screen's triangles, as an effect's sparks are */
+/* the 3DS's: a 2D sprite of the HUD's, which the game pins to an edge of
+ * the screen (SA_SPRITE_HUD), and which the bottom screen shows in play */
 constexpr uint32_t BATCH_SPRITE_2D = 1024;
 
 /* how a batch samples its texture. the low two bits hold an SA_FILTER_

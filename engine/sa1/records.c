@@ -2077,6 +2077,10 @@ void native_land_released(void)
     (NJD_SPRITE_ANGLE | NJD_SPRITE_COLOR | NJD_SPRITE_HFLIP |                  \
      NJD_SPRITE_VFLIP | NJD_SPRITE_SCALE | NJD_SPRITE_ALPHA)
 
+/* the pivot the game's 2D draws squeeze about, src/system/port.h's: away
+ * from the middle, the draw is one of the HUD's, pinned to an edge */
+extern float port_wide_anchor;
+
 void sa1_record_sprite(const NJS_SPRITE *sprite, int entry, uint32_t attr,
                        float y_scale, float bias, int screen)
 {
@@ -2132,7 +2136,8 @@ void sa1_record_sprite(const NJS_SPRITE *sprite, int entry, uint32_t attr,
     out.bias = bias;
     out.color = argb(c->a, c->r, c->g, c->b);
     out.flags =
-        (uint8_t)((attr & SPRITE_ATTRS) | (screen ? SA_SPRITE_SCREEN : 0));
+        (uint8_t)((attr & SPRITE_ATTRS) | (screen ? SA_SPRITE_SCREEN : 0) |
+                  (screen && port_wide_anchor != 0.0F ? SA_SPRITE_HUD : 0));
     out.depth = (uint8_t)((isp & ISP_DEPTH) >> ISP_DEPTH_SHIFT);
     out.fog = (uint8_t)((tsp & TSP_FOG) >> TSP_FOG_SHIFT);
     out.src = (uint8_t)((tsp & TSP_SRC) >> TSP_SRC_SHIFT);
