@@ -1,12 +1,16 @@
-; the 3DS backend's vertex shader: the CPU has placed each corner in clip
-; space, turned to the top screen's rotation, so a corner passes through as
-; it comes, with its texture coordinate and its color, scaled to 0 to 1. for the stereoscopic
+; the 3DS backend's vertex shader: place's four rows carry a corner into clip
+; space, turned to the top screen's rotation. a world corner comes as its
+; point, and place is the picture's view and lens (backend.cpp's
+; world_place); a corner the CPU placed comes in clip space, and place is the
+; identity. it passes with its texture coordinate and its color, scaled to 0
+; to 1. for the stereoscopic
 ; screen, eye moves it across the picture by its depth: eye.x times its w
 ; less eye.y, the depth that stays at the screen. clip y is across the
 ; picture, as the screen is turned a quarter
 
 ; Uniforms
 .fvec eye
+.fvec place[4]
 
 ; the PICA200 reads a byte attribute as 0 to 255, unnormalized, so a
 ; corner's color takes 1/255 here
@@ -23,9 +27,12 @@
 .out outclr color
 
 .proc main
-	mov r0, inpos
+	dp4 r0.x, place[0], inpos
+	dp4 r0.y, place[1], inpos
+	dp4 r0.z, place[2], inpos
+	dp4 r0.w, place[3], inpos
 	mov r1, eye
-	add r2.x, inpos.w, -r1.y
+	add r2.x, r0.w, -r1.y
 	mul r2.x, r2.x, r1.x
 	add r0.y, r0.y, -r2.x
 	mov outpos, r0

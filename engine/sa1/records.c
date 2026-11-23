@@ -18,6 +18,18 @@
 #include "ninja/njkamui.h"
 #include "play_math.h"
 #include "sa1.h"
+#ifdef SA_3DS
+#include "load_stats.h"
+
+/* the capture's time on the game's thread, by kind, which the 3DS's log
+ * reports (engine/3ds/main.c): models, the hashes among them, and sprites
+ * and triangles */
+uint64_t sa3ds_ticks_capture[4];
+/* within the models': the state and the matrix, the part, the model's draw,
+ * and shape_of */
+uint64_t sa3ds_ticks_model_parts[4];
+#define CAPTURE_TICK() sa3ds_tick()
+#endif
 
 /* what the records read of the game's task, in the host's layout */
 struct task {
@@ -480,7 +492,13 @@ static uint32_t mesh_of(const NJS_MODEL *model)
         records_refused++;
         return SA_CAP_NONE;
     }
+#ifdef SA_3DS
+    uint64_t hashing = CAPTURE_TICK();
+#endif
     hash = model_hash(model, sizes);
+#ifdef SA_3DS
+    sa3ds_ticks_capture[1] += CAPTURE_TICK() - hashing;
+#endif
     if (model_bytes(model, sizes, NULL) > MESH_ROOM) {
         records_refused++;
         return SA_CAP_NONE;
@@ -1691,9 +1709,27 @@ static void parts_settle(int kept)
     parts_drawn_count = 0;
 }
 
+static void record_model(const NJS_MODEL *model, uint8_t mode,
+                         enum sa1_header header, const struct sa1_attrs *attrs,
+                         uint16_t flags);
+
 void sa1_record_model(const NJS_MODEL *model, uint8_t mode,
                       enum sa1_header header, const struct sa1_attrs *attrs,
                       uint16_t flags)
+{
+#ifdef SA_3DS
+    uint64_t began = CAPTURE_TICK();
+
+    record_model(model, mode, header, attrs, flags);
+    sa3ds_ticks_capture[0] += CAPTURE_TICK() - began;
+#else
+    record_model(model, mode, header, attrs, flags);
+#endif
+}
+
+static void record_model(const NJS_MODEL *model, uint8_t mode,
+                         enum sa1_header header, const struct sa1_attrs *attrs,
+                         uint16_t flags)
 {
     struct part *part;
     struct reads reads;
@@ -1708,17 +1744,32 @@ void sa1_record_model(const NJS_MODEL *model, uint8_t mode,
     if (!picture_open) {
         begin_picture();
     }
+#ifdef SA_3DS
+    uint64_t t0 = CAPTURE_TICK(), t1, t2, t3;
+#endif
     struct draw_state state = state_now(header, attrs);
 
     if (mode == SA_SHADE_PALETTE) {
         palettes_drawn(state.palette, model->nbPoint);
     }
     to_world(draw.object_to_world);
+#ifdef SA_3DS
+    t1 = CAPTURE_TICK();
+    sa3ds_ticks_model_parts[0] += t1 - t0;
+#endif
     part = part_drawn(model, draw.object_to_world);
+#ifdef SA_3DS
+    t2 = CAPTURE_TICK();
+    sa3ds_ticks_model_parts[1] += t2 - t1;
+#endif
     if (!model_draw(model, mode, &state, &draw, &reads)) {
         picture_lost++;
         return;
     }
+#ifdef SA_3DS
+    t3 = CAPTURE_TICK();
+    sa3ds_ticks_model_parts[2] += t3 - t2;
+#endif
     draw.flags = flags;
     /* the task is born to a reader by its first draw, a part's too */
     draw.instance = instance();
@@ -1727,7 +1778,13 @@ void sa1_record_model(const NJS_MODEL *model, uint8_t mode,
     if (part) {
         draw.instance = part->instance;
     } else {
+#ifdef SA_3DS
+        uint64_t shaping = CAPTURE_TICK();
+#endif
         draw.thing = shape_of(model);
+#ifdef SA_3DS
+        sa3ds_ticks_model_parts[3] += CAPTURE_TICK() - shaping;
+#endif
         if (!nth_of(draw.instance, draw.thing, &draw.nth)) {
             picture_lost++;
             return;
@@ -2110,8 +2167,24 @@ void native_land_released(void)
  * from the middle, the draw is one of the HUD's, pinned to an edge */
 extern float port_wide_anchor;
 
+static void record_sprite(const NJS_SPRITE *sprite, int entry, uint32_t attr,
+                          float y_scale, float bias, int screen);
+
 void sa1_record_sprite(const NJS_SPRITE *sprite, int entry, uint32_t attr,
                        float y_scale, float bias, int screen)
+{
+#ifdef SA_3DS
+    uint64_t began = CAPTURE_TICK();
+
+    record_sprite(sprite, entry, attr, y_scale, bias, screen);
+    sa3ds_ticks_capture[2] += CAPTURE_TICK() - began;
+#else
+    record_sprite(sprite, entry, attr, y_scale, bias, screen);
+#endif
+}
+
+static void record_sprite(const NJS_SPRITE *sprite, int entry, uint32_t attr,
+                          float y_scale, float bias, int screen)
 {
     static const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     const NJS_TEXANIM *frame;
@@ -2277,7 +2350,21 @@ static void triangles_emit(sa_triangles *out, sa_point *points)
     } while (first < count);
 }
 
+static void record_triangles(const NJS_POINT3COL *p, int count, uint32_t attr);
+
 void sa1_record_triangles(const NJS_POINT3COL *p, int count, uint32_t attr)
+{
+#ifdef SA_3DS
+    uint64_t began = CAPTURE_TICK();
+
+    record_triangles(p, count, attr);
+    sa3ds_ticks_capture[3] += CAPTURE_TICK() - began;
+#else
+    record_triangles(p, count, attr);
+#endif
+}
+
+static void record_triangles(const NJS_POINT3COL *p, int count, uint32_t attr)
 {
     static sa_point points[1 << 12];
     int form = attr & NJD_DRAW_CONNECTED ? SA_TRIANGLES_STRIP

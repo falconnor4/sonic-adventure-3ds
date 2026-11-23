@@ -144,6 +144,11 @@ struct Backend {
     C3D_RenderTarget *right = nullptr;
     C3D_RenderTarget *bottom = nullptr;
     int eye_uniform = 0;
+    /* the shader's place, and the picture's: its view and lens as four rows
+     * over a world corner less the camera's point, which world_place gives */
+    int place_uniform = 0;
+    float world_place[16] = {};
+    float camera[3] = {};
     DVLB_s *shader_dvlb = nullptr;
     shaderProgram_s program;
     C3D_AttrInfo attributes;
@@ -413,7 +418,7 @@ void combine(uint32_t flags, bool textured)
  * picture and clip y to its left. a texture's rows lie from the bottom up,
  * and its t runs the same way, so a picture's v is t as it is */
 inline void place(const pc::Vertex &v, bool screen, const float *view,
-                  const sa_view &lens, Corner &out)
+                  const sa_view &lens, const float *camera, Corner &out)
 {
     if (screen) {
         float z = v.at[2] > NEAR ? v.at[2] : NEAR;
@@ -427,22 +432,98 @@ inline void place(const pc::Vertex &v, bool screen, const float *view,
         out.at[2] = -NEAR / z;
         out.at[3] = 1.0F;
     } else {
-        float x = view[0] * v.at[0] + view[1] * v.at[1] + view[2] * v.at[2] + view[3];
-        float y = view[4] * v.at[0] + view[5] * v.at[1] + view[6] * v.at[2] + view[7];
-        float z = view[8] * v.at[0] + view[9] * v.at[1] + view[10] * v.at[2] + view[11];
-        /* the pixel times w */
-        float sxw = lens.focal[0] * x + lens.center[0] * z;
-        float syw = lens.focal[1] * y + lens.center[1] * z;
-
-        out.at[0] = z - syw * (1.0F / 240.0F);
-        out.at[1] = z - sxw * (1.0F / 320.0F);
-        out.at[2] = -NEAR;
-        out.at[3] = z;
+        /* the shader carries a world corner through world_place's rows. the
+         * point goes less the camera's, in the CPU's full floats: the
+         * PICA200's 24-bit floats would lose a far point's place where its
+         * view subtracts the camera from it */
+        (void)view, (void)lens;
+        out.at[0] = v.at[0] - camera[0];
+        out.at[1] = v.at[1] - camera[1];
+        out.at[2] = v.at[2] - camera[2];
+        out.at[3] = 1.0F;
     }
     out.uv[0] = v.uv[0];
     out.uv[1] = v.uv[1];
     /* the scene's RGBA bytes, as the GPU's attribute reads them */
     out.color = v.base;
+}
+
+/* the picture's place for world corners: the camera's point, which the view
+ * [R | t] holds at -R^-1 t, and the rows that carry a point less it into
+ * clip space as place did on the CPU. with x, y and z the view's, clip x is z
+ * less the pixel's y times w over 240, clip y z less its x times w over 320,
+ * clip z -NEAR, and w z, each a line in x, y and z */
+void world_place(Backend &b, const float *view)
+{
+    double r[3][3], t[3], inv[3][3];
+
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            r[i][j] = view[i * 4 + j];
+        }
+        t[i] = view[i * 4 + 3];
+    }
+    double c00 = r[1][1] * r[2][2] - r[1][2] * r[2][1];
+    double c01 = r[1][2] * r[2][0] - r[1][0] * r[2][2];
+    double c02 = r[1][0] * r[2][1] - r[1][1] * r[2][0];
+    double det = r[0][0] * c00 + r[0][1] * c01 + r[0][2] * c02;
+
+    if (det == 0.0) {
+        det = 1.0;
+    }
+    inv[0][0] = c00 / det;
+    inv[0][1] = (r[0][2] * r[2][1] - r[0][1] * r[2][2]) / det;
+    inv[0][2] = (r[0][1] * r[1][2] - r[0][2] * r[1][1]) / det;
+    inv[1][0] = c01 / det;
+    inv[1][1] = (r[0][0] * r[2][2] - r[0][2] * r[2][0]) / det;
+    inv[1][2] = (r[0][2] * r[1][0] - r[0][0] * r[1][2]) / det;
+    inv[2][0] = c02 / det;
+    inv[2][1] = (r[0][1] * r[2][0] - r[0][0] * r[2][1]) / det;
+    inv[2][2] = (r[0][0] * r[1][1] - r[0][1] * r[1][0]) / det;
+    double cam[3], left[3];
+
+    for (int i = 0; i < 3; i++) {
+        cam[i] = -(inv[i][0] * t[0] + inv[i][1] * t[1] + inv[i][2] * t[2]);
+        b.camera[i] = (float)cam[i];
+    }
+    /* what the view leaves of the camera's point as the floats hold it,
+     * near 0, kept so the rows give the view's own x, y and z */
+    for (int i = 0; i < 3; i++) {
+        left[i] = r[i][0] * b.camera[0] + r[i][1] * b.camera[1] + r[i][2] * b.camera[2] + t[i];
+    }
+    const sa_view &lens = b.lens;
+    double rows[4][4];
+
+    for (int j = 0; j < 3; j++) {
+        double x = r[0][j], y = r[1][j], z = r[2][j];
+
+        rows[0][j] = z - (lens.focal[1] * y + lens.center[1] * z) / 240.0;
+        rows[1][j] = z - (lens.focal[0] * x + lens.center[0] * z) / 320.0;
+        rows[2][j] = 0.0;
+        rows[3][j] = z;
+    }
+    rows[0][3] = left[2] - (lens.focal[1] * left[1] + lens.center[1] * left[2]) / 240.0;
+    rows[1][3] = left[2] - (lens.focal[0] * left[0] + lens.center[0] * left[2]) / 320.0;
+    rows[2][3] = -NEAR;
+    rows[3][3] = left[2];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            b.world_place[i * 4 + j] = (float)rows[i][j];
+        }
+    }
+}
+
+/* place's rows for a batch: the picture's for a world batch, else the
+ * identity, its corners placed on the CPU */
+void set_place(const Backend &b, bool world)
+{
+    static const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const float *m = world ? b.world_place : identity;
+
+    for (int i = 0; i < 4; i++) {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, b.place_uniform + i, m[i * 4], m[i * 4 + 1],
+                      m[i * 4 + 2], m[i * 4 + 3]);
+    }
 }
 
 /* a batch as render places it: its corners' first in the GPU's buffer */
@@ -485,12 +566,16 @@ constexpr uint32_t CMDBUF_BYTES = C3D_DEFAULT_CMDBUF_SIZE * 12;
 constexpr float CMDBUF_FULL = 0.95F;
 uint32_t dropped_batches;
 float cmdbuf_peak;
+/* the batches' draws and their state's changes since the log last read them:
+ * draws, textures bound, combiners, blends, depths */
+uint64_t batch_counts[5];
 
 void draw_batches(Backend &b, const std::vector<Placed> &placed, float separation)
 {
     /* the state the last batch set, so a batch sets only what differs: each
      * of citro3d's calls marks state the next draw sends the GPU again */
     float shown = NAN;
+    int placed_world = -1;
     uint32_t bound = UINT32_MAX, sampled = UINT32_MAX, combined = UINT32_MAX;
     uint32_t blended = UINT32_MAX, tested = UINT32_MAX;
 
@@ -498,7 +583,12 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
         const pc::Batch &batch = *p.batch;
         const pc::State &s = batch.state;
         float shift = s.flags & pc::BATCH_SCREEN ? 0.0F : separation;
+        int world = (s.flags & pc::BATCH_SCREEN) ? 0 : 1;
 
+        if (world != placed_world) {
+            set_place(b, world != 0);
+            placed_world = world;
+        }
         if (shift != shown) {
             C3D_FVUnifSet(GPU_VERTEX_SHADER, b.eye_uniform, shift, STEREO_CONVERGENCE,
                           0.0F, 0.0F);
@@ -518,18 +608,21 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
                            wrap(s.sample, pc::SAMPLE_CLAMP_U, pc::SAMPLE_FLIP_U),
                            wrap(s.sample, pc::SAMPLE_CLAMP_V, pc::SAMPLE_FLIP_V));
             C3D_TexBind(0, tex);
+            batch_counts[1]++;
             bound = s.texture;
             sampled = s.sample;
         }
         uint32_t combine_key = (s.flags & (pc::BATCH_DECAL | pc::BATCH_OPAQUE)) | (textured ? 1U << 31 : 0);
 
         if (combine_key != combined) {
+            batch_counts[2]++;
             combine(s.flags, textured);
             combined = combine_key;
         }
         uint32_t blend_key = s.blend ? 0x10000U | s.src << 8 | s.dst : 0;
 
         if (blend_key != blended) {
+            batch_counts[3]++;
             if (s.blend) {
                 C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD,
                                blend_factor(s.src, true), blend_factor(s.dst, false),
@@ -543,6 +636,7 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
         uint32_t depth_key = (uint32_t)s.depth << 1 | s.depth_write;
 
         if (depth_key != tested) {
+            batch_counts[4]++;
             C3D_DepthTest(true, depth_func(s.depth),
                           s.depth_write ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
             tested = depth_key;
@@ -552,6 +646,7 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
             return;
         }
         C3D_DrawArrays(GPU_TRIANGLES, (int)p.first, (int)p.count);
+        batch_counts[0]++;
     }
 }
 
@@ -585,6 +680,7 @@ uint32_t backdrop(Backend &b, uint32_t at)
 
 void draw_backdrop(Backend &b, uint32_t first)
 {
+    set_place(b, false);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, b.eye_uniform, 0.0F, STEREO_CONVERGENCE, 0.0F, 0.0F);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
@@ -603,6 +699,7 @@ void render(Backend &b)
                      (back & 0xff) << 8 | 0xff;
 
     b.scene.uniform(u);
+    world_place(b, u.view);
     uint64_t begin_at = svcGetSystemTick();
     /* no wait for a vblank: the runner paces the game's frames itself */
     sa3ds_draw_step = 2;
@@ -646,7 +743,7 @@ void render(Backend &b)
             under.push_back(Placed{&batch, sent, batch.count / 3 * 3});
         } else {
             for (uint32_t i = 0; i < batch.count; i++) {
-                place(vertices[batch.first + i], screen, u.view, b.lens,
+                place(vertices[batch.first + i], screen, u.view, b.lens, b.camera,
                       b.corners[sent + i]);
             }
             top.push_back(Placed{&batch, sent, batch.count});
@@ -761,6 +858,7 @@ sa_result sa::backend_create(sa_engine &engine)
     shaderProgramInit(&b->program);
     shaderProgramSetVsh(&b->program, &b->shader_dvlb->DVLE[0]);
     b->eye_uniform = shaderInstanceGetUniformLocation(b->program.vertexShader, "eye");
+    b->place_uniform = shaderInstanceGetUniformLocation(b->program.vertexShader, "place");
     AttrInfo_Init(&b->attributes);
     AttrInfo_AddLoader(&b->attributes, 0, GPU_FLOAT, 4);
     AttrInfo_AddLoader(&b->attributes, 1, GPU_FLOAT, 2);
@@ -1023,6 +1121,13 @@ extern uint64_t sa3ds_ticks_render;
 uint64_t sa3ds_ticks_begin;
 /* the GPU's command buffer's most use, of 1, and the batches it dropped,
  * since the log last read them (main.c) */
+/* the batches' counts since the last read, and none after */
+void sa3ds_batch_counts(uint64_t out[5])
+{
+    memcpy(out, batch_counts, sizeof batch_counts);
+    memset(batch_counts, 0, sizeof batch_counts);
+}
+
 float sa3ds_cmdbuf_peak(uint32_t *dropped)
 {
     float peak = cmdbuf_peak;

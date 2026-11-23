@@ -189,6 +189,19 @@ void native_vsync(void)
         {
             /* the GPU's submission by part (backend.cpp) */
             extern uint64_t sa3ds_ticks_begin, sa3ds_ticks_parts[5], sa3ds_ticks_meshes;
+            extern uint64_t sa3ds_ticks_capture[4], sa3ds_ticks_model_parts[4];
+
+            native_log("sa3ds: a model's capture: state and matrix %.2f, part %.2f, the draw "
+                       "%.2f, shape %.2f",
+                       sa3ds_ticks_model_parts[0] * ms, sa3ds_ticks_model_parts[1] * ms,
+                       sa3ds_ticks_model_parts[2] * ms, sa3ds_ticks_model_parts[3] * ms);
+            memset(sa3ds_ticks_model_parts, 0, sizeof sa3ds_ticks_model_parts);
+
+            native_log("sa3ds: the game's capture: models %.2f, of which their hashes %.2f; "
+                       "sprites %.2f; triangles %.2f",
+                       sa3ds_ticks_capture[0] * ms, sa3ds_ticks_capture[1] * ms,
+                       sa3ds_ticks_capture[2] * ms, sa3ds_ticks_capture[3] * ms);
+            memset(sa3ds_ticks_capture, 0, sizeof sa3ds_ticks_capture);
 
             native_log("sa3ds: of which the meshes' points %.2f; C3D_FrameBegin %.2f, the scene's "
                        "end %.2f, placing the corners %.2f, flushing them %.2f, the batches %.2f, "
@@ -205,8 +218,17 @@ void native_vsync(void)
             uint32_t dropped = 0;
             float peak = sa3ds_cmdbuf_peak(&dropped);
 
+            extern void sa3ds_batch_counts(uint64_t out[5]);
+            uint64_t counts[5];
+
             native_log("sa3ds: the GPU's command buffer at most %d%% full, %lu batches dropped",
                        (int)(peak * 100.0F), (unsigned long)dropped);
+            sa3ds_batch_counts(counts);
+            native_log("sa3ds: draws %llu, textures bound %llu, combiners %llu, blends %llu, "
+                       "depths %llu",
+                       (unsigned long long)counts[0], (unsigned long long)counts[1],
+                       (unsigned long long)counts[2], (unsigned long long)counts[3],
+                       (unsigned long long)counts[4]);
         }
         {
             extern volatile uint64_t sa3ds_ticks_audio;

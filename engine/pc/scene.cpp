@@ -396,6 +396,26 @@ void Scene::placed(const sa_draw &d, const MeshView &mesh,
     float origin[3] = {w[3], w[7], w[11]};
     float draw_z = view_z(origin);
     uint32_t offsets = (pal + (specular ? 1 : 0)) * SA_PALETTE_ENTRIES * 2 + 1;
+    /* what the corners below read of each point, by the shade's mode and the
+     * meshsets' materials: the palette's colors in the palette's mode, the
+     * intensity in the modes that scale the diffuse, the normal in the
+     * world where lights light it, and the env map's uv where a material
+     * takes it. a point leaves the rest unworked, which no corner reads */
+    bool want_palette = shade.mode == SA_SHADE_PALETTE;
+    bool want_intensity = shade.mode != SA_SHADE_PALETTE && shade.mode != SA_SHADE_LIGHTS;
+    bool want_normal = shade.mode == SA_SHADE_LIGHTS && lights != nullptr;
+    bool want_env = false;
+    {
+        const uint8_t *scan = mesh.sets;
+
+        for (uint32_t set = 0; set < mesh.meshsets && !want_env; set++) {
+            sa_meshset head;
+
+            memcpy(&head, scan, sizeof head);
+            want_env = (materials[head.material].flags & SA_MAT_ENV) != 0;
+            scan += meshset_bytes(head);
+        }
+    }
 
     for (uint32_t i = 0; i < points; i++) {
         const float *p = &mesh.points[i * 3];
@@ -414,27 +434,37 @@ void Scene::placed(const sa_draw &d, const MeshView &mesh,
         }
         const float *n = &mesh.normals[i * 3];
         float dot = n[0] * light[0] + n[1] * light[1] + n[2] * light[2];
-        intensity_[i] = ninja_intensity(shade, dot);
-        /* a dot that is no number takes the first entry */
-        float scaled = dot * 127.5F + 127.5F;
-        int entry = scaled > 0.0F
-                        ? (scaled < 255.0F ? static_cast<int>(scaled) : 255)
-                        : 0;
-        uint32_t at = offsets + entry * 2;
-        base_[i] = words != nullptr
-                       ? words[pal * SA_PALETTE_ENTRIES * 2 + entry * 2]
-                       : 0;
-        offset_[i] = words != nullptr && at < WORDS ? words[at] : 0;
+
+        if (want_intensity) {
+            intensity_[i] = ninja_intensity(shade, dot);
+        }
+        if (want_palette) {
+            /* a dot that is no number takes the first entry */
+            float scaled = dot * 127.5F + 127.5F;
+            int entry = scaled > 0.0F
+                            ? (scaled < 255.0F ? static_cast<int>(scaled) : 255)
+                            : 0;
+            uint32_t at = offsets + entry * 2;
+            base_[i] = words != nullptr
+                           ? words[pal * SA_PALETTE_ENTRIES * 2 + entry * 2]
+                           : 0;
+            offset_[i] = words != nullptr && at < WORDS ? words[at] : 0;
+        }
+        if (!want_normal && !want_env) {
+            continue;
+        }
         /* an env map's uv: the normal turned into view space */
         float wn[3];
         for (int j = 0; j < 3; j++) {
             wn[j] = w[j * 4] * n[0] + w[j * 4 + 1] * n[1] + w[j * 4 + 2] * n[2];
             normal_[i * 3 + j] = wn[j];
         }
-        float vx = v[0] * wn[0] + v[1] * wn[1] + v[2] * wn[2];
-        float vy = v[4] * wn[0] + v[5] * wn[1] + v[6] * wn[2];
-        env_[i * 2] = vx * 0.5F + 0.5F;
-        env_[i * 2 + 1] = vy * 0.5F + 0.5F;
+        if (want_env) {
+            float vx = v[0] * wn[0] + v[1] * wn[1] + v[2] * wn[2];
+            float vy = v[4] * wn[0] + v[5] * wn[1] + v[6] * wn[2];
+            env_[i * 2] = vx * 0.5F + 0.5F;
+            env_[i * 2 + 1] = vy * 0.5F + 0.5F;
+        }
     }
     const uint8_t *at = mesh.sets;
     /* SA1's shade: a meshset under SA_MAT_WHITE leaves the draw's points
@@ -482,6 +512,20 @@ void Scene::placed(const sa_draw &d, const MeshView &mesh,
         uint32_t alpha = static_cast<uint32_t>(mat.alpha) << 24;
         Vertex tri[3];
 
+        /* an opaque meshset's triangles share its state, so they join one
+         * batch as add would join them a triangle at a time: the last batch
+         * where it holds this state and ends where the list does, else a new
+         * one */
+        if (!blended && head.corners >= 3 &&
+            (batches_.empty() ||
+             memcmp(&batches_.back().state, &state, sizeof state) != 0 ||
+             batches_.back().first + batches_.back().count != vertices_.size())) {
+            Batch fresh;
+
+            fresh.state = state;
+            fresh.first = static_cast<uint32_t>(vertices_.size());
+            batches_.push_back(fresh);
+        }
         for (uint32_t c = 0; c + 2 < head.corners; c += 3) {
             for (int k = 0; k < 3; k++) {
                 uint32_t i = corners[c + k];
@@ -551,7 +595,8 @@ void Scene::placed(const sa_draw &d, const MeshView &mesh,
                                 false};
                 blend_list_.push_back(t);
             } else {
-                add(vertices_, batches_, state, tri, 3);
+                vertices_.insert(vertices_.end(), tri, tri + 3);
+                batches_.back().count += 3;
             }
             triangle_count_++;
         }
