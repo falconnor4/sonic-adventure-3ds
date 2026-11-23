@@ -470,7 +470,8 @@ $(NATIVE)/stubs.c: $(NATIVE_LINK_OBJ) engine/tools/stubs.py engine/native/stubs.
 NATIVE_LIBRARIES = $(addprefix $(LLVM_MINGW)/x86_64-w64-mingw32/lib/,libucrt.a libmingwex.a libmingw32.a \
 	libwinpthread.a libkernel32.a) $(wildcard $(LLVM_MINGW)/lib/clang/*/lib/windows/libclang_rt.builtins-x86_64.a)
 # The calls the pads and the adapter hang on
-NATIVE_WRAPS := pad_scan frame_wait njDrawTriangle3D njDrawPolygon2D njDrawLine3D njDrawTexture njDrawPolygon kmRender
+NATIVE_WRAPS := pad_scan frame_wait njDrawTriangle3D njDrawPolygon2D njDrawLine3D njDrawTexture njDrawPolygon kmRender \
+	event_load event_start port_curtain
 $(NATIVE)/stubs.o: $(NATIVE)/stubs.c $(NATIVE_NEEDS)
 	$(Q)$(NATIVE_CC) $(NATIVE_ARCH) -std=gnu17 -O1 -w -c -o $@ $<
 # Past 0, the image lies in the domain too, and syCacheICI's P2 call with it.

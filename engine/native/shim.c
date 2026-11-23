@@ -886,3 +886,39 @@ void fill_bytes(void *mem, int value, int count)
 {
     memset(mem, value, (uint32_t)count);
 }
+
+/* the events in the log: each one's load, whether its start plays it, and
+ * the port's skip as its curtain falls and lifts. a story's events that
+ * never showed leave these to say which way they went */
+void __real_event_load(int number);
+void __real_event_start(void);
+void __real_port_curtain(int on);
+int event_is_playing(int unused);
+
+void __wrap_event_load(int number)
+{
+    fprintf(stderr, "sa1: event %#x loads, at vsync %lu\n", (unsigned)number, native_vsyncs);
+    __real_event_load(number);
+}
+
+void __wrap_event_start(void)
+{
+    /* an event whose thread stands from before ends rather than plays */
+    int stale = event_is_playing(0);
+
+    __real_event_start();
+    fprintf(stderr, "sa1: the event %s, at vsync %lu\n",
+            stale ? "ends unplayed, its thread left from before" : "starts", native_vsyncs);
+}
+
+void __wrap_port_curtain(int on)
+{
+    static int shown;
+
+    if (on != shown) {
+        fprintf(stderr, "sa1: the skip's curtain %s, at vsync %lu\n", on ? "falls" : "lifts",
+                native_vsyncs);
+        shown = on;
+    }
+    __real_port_curtain(on);
+}
