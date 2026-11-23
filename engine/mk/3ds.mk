@@ -534,8 +534,11 @@ $(3DS_ART)/banner.bnr: $(BANNERTOOL) $(3DS_ART)/banner-shown.png $(3DS_ART)/bann
 	@$(call status,banner,$@)
 	$(Q)$(BANNERTOOL) makebanner -i $(3DS_ART)/banner-shown.png -a $(3DS_ART)/banner.wav -o $@ > /dev/null
 
-# the movies' splitter (engine/3ds/host/movies.c), made on the host with CC
+# the movies' splitter (engine/3ds/host/movies.c), made on the host with CC,
+# and ffmpeg, which re-encodes a video too tall for the screen
 3DS_MOVIES := $(3DS_DIR)/host/movies
+FFMPEG ?= ffmpeg
+FFPROBE ?= ffprobe
 $(3DS_MOVIES): engine/3ds/host/movies.c tools/pl_mpeg/pl_mpeg.h
 	@$(call status,cc,$@)
 	$(Q)mkdir -p $(@D)
@@ -564,6 +567,18 @@ $(3DS_DIR)/romfs-cia.txt: $(3DS_ROMFS)/symbols.bin $(3DS_ROMFS)/programs.txt $(3
 	@# each movie beside its SFD, split into its video and its sound
 	$(Q)cd $(3DS_CIA_ROMFS)/disc && find . -type f -iname '*.sfd' | while read -r sfd; do \
 		$(abspath $(3DS_MOVIES)) "$$(dirname "$$sfd")" "$$sfd" || exit 1; done
+	@# a video taller than the top screen's 240 lines, the opening's and the
+	@# logos' 448, at half its height, which the screen shows it at anyway:
+	@# MPEG-1's decoding costs by the picture's size, and at 448 the 3DS's CPU
+	@# kept up with some 18 of its 30 pictures a second. its pictures and
+	@# their rate stay, so their count in its .MVA holds
+	$(Q)cd $(3DS_CIA_ROMFS)/disc && find . -type f -iname '*.m1v' | while read -r m1v; do \
+		h=$$($(FFPROBE) -v error -select_streams v:0 -show_entries stream=height \
+			-of default=noprint_wrappers=1:nokey=1 "$$m1v") || exit 1; \
+		case "$$h" in ''|*[!0-9]*) echo "$$m1v: no height from $(FFPROBE): $$h"; exit 1;; esac; \
+		[ "$$h" -gt 240 ] || continue; \
+		$(FFMPEG) -nostdin -v error -y -i "$$m1v" -vf "scale=iw:ih/2:flags=lanczos" -c:v mpeg1video -q:v 4 -bf 0 \
+			-f mpeg1video "$$m1v.half" && mv -f "$$m1v.half" "$$m1v" || exit 1; done
 	$(Q)touch $@
 
 3DS_CIA := $(3DS_DIR)/sa3ds.cia

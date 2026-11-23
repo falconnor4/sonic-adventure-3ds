@@ -18,8 +18,9 @@ makes from it may be shared.
 1. Put the disc's files in `orig/`, named as on the disc (`1ST_READ.BIN`,
    `LOADER.BIN`, `SONICADV/` and the rest), or its `.gdi` and tracks.
 2. Enter the tools: `nix-shell` in the checkout on Nix or NixOS. Elsewhere,
-   install GNU make, Python 3, clang, a C++ compiler, curl, ImageMagick and
-   patchelf (the last for NixOS's loader only).
+   install GNU make, Python 3, clang, a C++ compiler, curl, ImageMagick,
+   ffmpeg (for the CIA's movies) and patchelf (the last for NixOS's loader
+   only).
 3. `make devkitarm` fetches devkitARM through Nix ([The toolchain](#the-toolchain)).
 4. `make pc` reads the disc into `build/gen/`, which the 3DS build reads, and
    builds the PC game on the way.
