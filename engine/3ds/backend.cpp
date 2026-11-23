@@ -425,6 +425,12 @@ void combine(uint32_t flags, bool textured)
 /* the triangles guard collapsed since the log last read them, and the
  * pictures whose view it found the GPU can't take */
 uint32_t unsent_triangles, unsent_views;
+/* the meshes made, each one's number */
+uint64_t mesh_serial;
+/* the times the DSP played out every buffer before the sound's thread gave
+ * it the next: each a gap in the sound, heard as a crackle. sixty() reads
+ * them, and the log */
+volatile uint32_t audio_underruns, audio_underruns_logged;
 
 /* whether the PICA200 takes these: finite, and short of 2^40, where its
  * 24-bit floats' products would pass their range. a NaN or an infinity in a
@@ -886,6 +892,9 @@ sa_result sa::backend_create(sa_engine &engine)
     b->resources.resize(engine.desc.resources);
     b->textures.reserve(engine.desc.resources);
     b->scene.open(SA_PC_BLEND_TRIANGLE);
+    /* most of a picture's points stand as the last picture's did, the
+     * stage's own above all: the scene gives those its corners again */
+    b->scene.reuse(true);
     if (!C3D_Init(CMDBUF_BYTES)) {
         return SA_ERR_UNSUPPORTED;
     }
@@ -1197,6 +1206,24 @@ void sa3ds_batch_counts(uint64_t out[5])
     memset(batch_counts, 0, sizeof batch_counts);
 }
 
+/* the scene's points placed anew and taken again since the last call */
+uint64_t reuse_worked, reuse_reused;
+
+uint32_t sa3ds_underruns(void)
+{
+    uint32_t now = audio_underruns, since = now - audio_underruns_logged;
+
+    audio_underruns_logged = now;
+    return since;
+}
+
+void sa3ds_reuse(uint64_t *worked, uint64_t *reused)
+{
+    *worked = reuse_worked;
+    *reused = reuse_reused;
+    reuse_worked = reuse_reused = 0;
+}
+
 void sa3ds_unsent(uint32_t *triangles, uint32_t *views)
 {
     *triangles = unsent_triangles;
@@ -1273,8 +1300,19 @@ void audio_main(void *data)
 
     fpscr_write((fpscr_read() & ~(FPSCR_ROUNDING | FPSCR_TRAPS)) | FPSCR_NEAREST |
                 FPSCR_RUNFAST);
+    bool started = false;
+
     while (!b.audio_quit) {
         sa3ds_audio_busy = 1;
+        uint32_t played = 0;
+
+        for (const ndspWaveBuf &wave : b.waves) {
+            played += wave.status == NDSP_WBUF_FREE || wave.status == NDSP_WBUF_DONE;
+        }
+        if (started && played == AUDIO_BUFFERS) {
+            audio_underruns++;
+        }
+        started = true;
         for (ndspWaveBuf &wave : b.waves) {
             if (wave.status != NDSP_WBUF_FREE && wave.status != NDSP_WBUF_DONE) {
                 continue;
@@ -1413,6 +1451,9 @@ sa_result sa_resource_create(sa_engine *engine, const sa_resource_desc *desc,
             !pc::mesh_view(desc->data, desc->bytes, made.mesh)) {
             return SA_ERR_INVALID;
         }
+        /* a number of its own for the scene's reuse, which no later mesh
+         * takes, though it take this one's place and handle */
+        made.mesh.serial = ++mesh_serial;
         break;
     case SA_FORMAT_PIXELS: {
         sa_pixels size;
@@ -1781,6 +1822,13 @@ sa_result sa_present_end(sa_engine *engine)
     sa3ds_draw_step = 1;
     uint64_t ended = svcGetSystemTick();
 
+    {
+        uint64_t worked, reused;
+
+        b.scene.reuse_counts(worked, reused);
+        reuse_worked += worked;
+        reuse_reused += reused;
+    }
     b.scene.finish();
     sa3ds_ticks_parts[0] += svcGetSystemTick() - ended;
     render(b);
@@ -1811,10 +1859,14 @@ sa_result sa_present_ended(sa_engine *engine, uint32_t instance)
  * at 60 it falls back where the busy time passes SIXTY_LEAVE. each is an
  * average over some 8 frames, and a change holds SIXTY_HOLD frames, a fall
  * back from 60 SIXTY_RETRY, so a passing spike moves neither and a frame
- * that can't hold 60 tries it seldom */
+ * that can't hold 60 tries it seldom. a frame at 60 that runs past its two
+ * vsyncs by SIXTY_LATE slows the game itself, and SIXTY_LATE_MOST of them
+ * among SIXTY_HOLD frames fall back at once, whatever the averages say */
 constexpr float SIXTY_ENTER = 0.85F;
 constexpr float SIXTY_LEAVE = 0.95F;
-constexpr float SIXTY_COST = 2.0F;
+constexpr float SIXTY_COST = 2.5F;
+constexpr float SIXTY_LATE = 1.05F;
+constexpr uint32_t SIXTY_LATE_MOST = 3;
 constexpr uint32_t SIXTY_HOLD = 30;
 constexpr uint32_t SIXTY_RETRY = 300;
 constexpr uint32_t SIXTY_WARM = 8;
@@ -1825,7 +1877,7 @@ bool sixty()
     static uint64_t last_tick, last_give, last_wait;
     static float busy_avg, draw_avg;
     static bool split;
-    static uint32_t held, measured;
+    static uint32_t held, measured, late, late_window;
     const float frame = 2.0F * SYSCLOCK_ARM11 / 59.94F;
     uint64_t now = svcGetSystemTick();
     uint64_t give = sa3ds_ticks_give_ever, wait = sa3ds_ticks_wait_ever;
@@ -1840,11 +1892,30 @@ bool sixty()
             busy_avg += (busy - busy_avg) / 8.0F;
             draw_avg += (draw - draw_avg) / 8.0F;
             measured++;
+            if (split) {
+                late += all > SIXTY_LATE * frame;
+                if (++late_window >= SIXTY_HOLD) {
+                    late = late_window = 0;
+                }
+            }
         }
     }
     last_tick = now;
     last_give = give;
     last_wait = wait;
+    static uint32_t underruns_seen;
+    uint32_t underruns = audio_underruns;
+    bool starved = underruns != underruns_seen;
+
+    underruns_seen = underruns;
+    if (split && (late >= SIXTY_LATE_MOST || starved)) {
+        split = false;
+        held = SIXTY_RETRY;
+        late = late_window = 0;
+        fprintf(stderr, "engine: 30 fps, %s at 60\n",
+                starved ? "the sound starved" : "frames late");
+        return split;
+    }
     if (held > 0 || measured < SIXTY_WARM) {
         held -= held > 0;
         return split;
@@ -1864,6 +1935,7 @@ bool sixty()
 
     if (wanted != split) {
         split = wanted;
+        late = late_window = 0;
         held = split ? SIXTY_HOLD : SIXTY_RETRY;
         fprintf(stderr, "engine: %d fps, a frame busy %.1f ms and drawing %.1f\n", split ? 60 : 30,
                 busy_avg * 1000.0F / SYSCLOCK_ARM11, draw_avg * 1000.0F / SYSCLOCK_ARM11);

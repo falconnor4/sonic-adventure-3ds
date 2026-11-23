@@ -29,6 +29,10 @@ struct MeshView {
     uint32_t meshsets = 0;
     uint32_t materials = 0; /* a draw's list must be this long */
     uint32_t triangles = 0;
+    /* the mesh's own number among those its host made, which a host that
+     * keeps a mesh's bytes for as long as the number lives gives it, else 0.
+     * reuse matches draws by it */
+    uint64_t serial = 0;
 };
 /* read bytes as a mesh. it returns false where they hold no whole one, or a
  * count or corner is invalid */
@@ -87,7 +91,19 @@ public:
      * where they share a matrix or home's has an inverse */
     bool carries(uint32_t home, uint32_t index) const;
     void fog(const sa_fog &fog) { fog_ = fog; }
-    void palettes(const uint32_t *words) { palettes_ = words; }
+    void palettes(const uint32_t *words);
+    /* keep each picture's placed draws, and give a draw that matches one of
+     * the last picture's in all it reads that one's corners again, rather
+     * than place and light its points anew. a host turns it on before its
+     * first picture */
+    void reuse(bool on) { reuse_ = on; }
+    /* the points placed anew and taken again since the last call */
+    void reuse_counts(uint64_t &worked, uint64_t &reused)
+    {
+        worked = worked_points_;
+        reused = reused_points_;
+        worked_points_ = reused_points_ = 0;
+    }
     /* whether the scene has room for this many triangles more */
     bool room(uint32_t triangles) const;
     /* textures[i] is materials[i]'s raster texture, 0 for white. lights
@@ -171,6 +187,44 @@ private:
     std::vector<float> normal_; /* in world space, under SA_SHADE_LIGHTS */
     /* the material + 1 a point was lit for, 0 for none yet */
     std::vector<uint32_t> lit_;
+
+    /* reuse's: a draw's key, all placed() reads hashed, and where its
+     * corners went: its opaque runs, its blend triangles in blend_list_ and
+     * its triangles in all. a picture's ends, past finish(), as the last */
+    struct Run {
+        State state;
+        uint32_t first, count; /* in vertices_ */
+    };
+    struct Placing {
+        uint64_t key;
+        uint32_t runs, run_count;
+        uint32_t blends, blend_count;
+        uint32_t triangles, points;
+        /* the matrix and light its corners were made under */
+        float world[12], light[3];
+    };
+    /* Placings' indices by key, open addressed. a slot holds its index + 1
+     * where its stamp is the table's now */
+    struct Keys {
+        std::vector<uint32_t> slot, stamp;
+        uint32_t now = 0;
+        void clear() { now++; }
+        uint32_t find(uint64_t key, const std::vector<Placing> &in) const;
+        void add(uint64_t key, uint32_t index);
+    };
+    uint64_t key_of(const sa_draw &d, const MeshView &mesh,
+                    const sa_material *materials, const uint32_t *textures,
+                    const sa_shade &shade, const sa_lights *lights,
+                    bool env) const;
+    bool replay(uint64_t key, const sa_draw &d, const sa_shade &shade);
+    bool reuse_ = false;
+    uint64_t palettes_key_ = 0;
+    std::vector<Run> runs_, last_runs_;
+    std::vector<Placing> placings_, last_placings_;
+    std::vector<Vertex> last_vertices_;
+    std::vector<BlendTriangle> last_blend_list_;
+    Keys keys_, last_keys_;
+    uint64_t worked_points_ = 0, reused_points_ = 0;
 };
 
 } // namespace pc

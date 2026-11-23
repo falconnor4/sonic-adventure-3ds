@@ -209,6 +209,14 @@ void native_vsync(void)
                        sa3ds_ticks_meshes * ms, sa3ds_ticks_begin * ms, sa3ds_ticks_parts[0] * ms,
                        sa3ds_ticks_parts[1] * ms, sa3ds_ticks_parts[2] * ms,
                        sa3ds_ticks_parts[3] * ms, sa3ds_ticks_parts[4] * ms);
+            extern void sa3ds_reuse(uint64_t *worked, uint64_t *reused);
+            uint64_t worked = 0, reused = 0;
+
+            sa3ds_reuse(&worked, &reused);
+            native_log("sa3ds: the meshes' points %.0f%% taken again from the picture before, "
+                       "%llu placed anew",
+                       worked + reused ? 100.0 * reused / (worked + reused) : 0.0,
+                       (unsigned long long)worked);
             sa3ds_ticks_begin = 0;
             sa3ds_ticks_meshes = 0;
             memset(sa3ds_ticks_parts, 0, sizeof sa3ds_ticks_parts);
@@ -239,14 +247,16 @@ void native_vsync(void)
         {
             extern volatile uint64_t sa3ds_ticks_audio;
             extern uint64_t sa3ds_mix_frames, sa3ds_mix_voices, sa3ds_mix_steps;
+            extern uint32_t sa3ds_underruns(void);
 
             native_log("sa3ds: the sound's mixing took %.1f%% of a core: %llu frames, %.1f voices "
-                       "and %.0f DSP steps a frame",
+                       "and %.0f DSP steps a frame, %lu times it ran dry",
                        sa3ds_ticks_all ? 100.0 * (double)sa3ds_ticks_audio / (double)sa3ds_ticks_all
                                        : 0.0,
                        (unsigned long long)sa3ds_mix_frames,
                        sa3ds_mix_frames ? (double)sa3ds_mix_voices / (double)sa3ds_mix_frames : 0.0,
-                       sa3ds_mix_frames ? (double)sa3ds_mix_steps / (double)sa3ds_mix_frames : 0.0);
+                       sa3ds_mix_frames ? (double)sa3ds_mix_steps / (double)sa3ds_mix_frames : 0.0,
+                       (unsigned long)sa3ds_underruns());
             sa3ds_ticks_audio = 0;
             sa3ds_mix_frames = sa3ds_mix_voices = sa3ds_mix_steps = 0;
         }

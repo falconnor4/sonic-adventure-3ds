@@ -560,10 +560,15 @@ $(3DS_DIR)/romfs-cia.txt: $(3DS_ROMFS)/symbols.bin $(3DS_ROMFS)/programs.txt $(3
 $(3DS_CIA): $(3DS_CIA_ELF) $(MAKEROM) engine/3ds/sa3ds.rsf $(3DS_DIR)/sa3ds.smdh $(3DS_ART)/banner.bnr \
 		$(3DS_DIR)/romfs-cia.txt
 	@$(call status,cia,$@)
-	$(Q)$(MAKEROM) -f cia -o $@ -elf $< -rsf engine/3ds/sa3ds.rsf -icon $(3DS_DIR)/sa3ds.smdh \
+	$(Q)rm -f $@.part
+	$(Q)$(MAKEROM) -f cia -o $@.part -elf $< -rsf engine/3ds/sa3ds.rsf -icon $(3DS_DIR)/sa3ds.smdh \
 		-banner $(3DS_ART)/banner.bnr -DROMFS=$(abspath $(3DS_CIA_ROMFS)) -target t -exefslogo 2>&1 | \
 		grep -v 'Failed to sign' || true
-	$(Q)[ -s $@ ] || { echo "$@: makerom made no CIA"; exit 1; }
+	$(Q)[ -s $@.part ] || { echo "$@: makerom made no CIA"; exit 1; }
+	@# the CIA appears whole or not at all, so a copy made while it builds
+	@# never takes half of one
+	$(Q)mv -f $@.part $@
+	$(Q)sha256sum $@ | sed 's|  .*/|  |' > $@.sha256
 
 ## build the 3DS game as a CIA, which installs to the HOME Menu
 3ds-cia: $(3DS_CIA)

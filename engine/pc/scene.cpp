@@ -207,8 +207,222 @@ void Scene::open(uint32_t blend)
     lit_.resize(MOST_POINTS);
 }
 
+/* words into a 64-bit hash, 4 bytes at a time; bytes past the last whole
+ * word go in alone */
+/* x's cell on a grid of steps a unit; one that is no number, or past the
+ * grid's reach, its bits */
+static int32_t on_grid(float x, float steps)
+{
+    float scaled = x * steps;
+
+    if (scaled > -1e9F && scaled < 1e9F) {
+        return static_cast<int32_t>(lrintf(scaled));
+    }
+    int32_t bits;
+
+    memcpy(&bits, &x, sizeof bits);
+    return bits;
+}
+
+/* whether a draw's matrix and light lie close enough to those a placing was
+ * made under that its corners stand for the draw's: a turn's terms within
+ * 1e-4, the place within 0.02 of a unit, and the light within 1e-3 */
+static bool close(const float *a, const float *b, const float *la, const float *lb)
+{
+    for (int i = 0; i < 12; i++) {
+        float limit = i % 4 == 3 ? 0.02F : 1e-4F;
+
+        if (!(fabsf(a[i] - b[i]) <= limit)) {
+            return false;
+        }
+    }
+    for (int i = 0; i < 3; i++) {
+        if (!(fabsf(la[i] - lb[i]) <= 1e-3F)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static uint64_t hash_bytes(uint64_t h, const void *data, size_t bytes)
+{
+    const uint8_t *at = static_cast<const uint8_t *>(data);
+    size_t words = bytes / 4;
+
+    for (size_t i = 0; i < words; i++) {
+        uint32_t w;
+
+        memcpy(&w, at + i * 4, 4);
+        h = (h ^ w) * 0x100000001b3ULL;
+        h ^= h >> 29;
+    }
+    for (size_t i = words * 4; i < bytes; i++) {
+        h = (h ^ at[i]) * 0x100000001b3ULL;
+    }
+    return h;
+}
+
+constexpr uint32_t KEY_SLOTS = 1U << 13;
+
+uint32_t Scene::Keys::find(uint64_t key, const std::vector<Placing> &in) const
+{
+    if (slot.empty()) {
+        return 0;
+    }
+    for (uint32_t i = static_cast<uint32_t>(key) & (KEY_SLOTS - 1), n = 0; n < 16;
+         i = (i + 1) & (KEY_SLOTS - 1), n++) {
+        if (stamp[i] != now) {
+            return 0;
+        }
+        if (in[slot[i] - 1].key == key) {
+            return slot[i];
+        }
+    }
+    return 0;
+}
+
+void Scene::Keys::add(uint64_t key, uint32_t index)
+{
+    if (slot.empty()) {
+        slot.resize(KEY_SLOTS);
+        stamp.resize(KEY_SLOTS);
+        now = 1;
+    }
+    for (uint32_t i = static_cast<uint32_t>(key) & (KEY_SLOTS - 1), n = 0; n < 16;
+         i = (i + 1) & (KEY_SLOTS - 1), n++) {
+        if (stamp[i] != now) {
+            stamp[i] = now;
+            slot[i] = index + 1;
+            return;
+        }
+    }
+}
+
+void Scene::palettes(const uint32_t *words)
+{
+    palettes_ = words;
+    if (reuse_ && words != nullptr) {
+        palettes_key_ = hash_bytes(0xcbf29ce484222325ULL, words, WORDS * sizeof *words);
+    }
+}
+
+/* all that placed() reads of a draw, hashed: its matrix and tint, its mesh
+ * by number, its materials and textures, its shade, its lights, the
+ * palettes in a game's mode, and the view's matrix where an env map turns
+ * by it. a draw's depth in the view and its blend triangles' go unhashed:
+ * replay works them out again */
+uint64_t Scene::key_of(const sa_draw &d, const MeshView &mesh,
+                       const sa_material *materials, const uint32_t *textures,
+                       const sa_shade &shade, const sa_lights *lights,
+                       bool env) const
+{
+    uint64_t h = 0xcbf29ce484222325ULL;
+
+    int32_t grid[15];
+
+    /* the matrix and the light on a grid, rather than as they are: the
+     * capture gives a still model's matrix through the view's inverse, and
+     * a moving camera leaves it some float's rounding off each picture.
+     * replay holds a match to close() */
+    for (int i = 0; i < 12; i++) {
+        grid[i] = on_grid(d.object_to_world[i], i % 4 == 3 ? 4.0F : 1024.0F);
+    }
+    for (int i = 0; i < 3; i++) {
+        grid[12 + i] = on_grid(shade.light[i], 1024.0F);
+    }
+    h = hash_bytes(h, &mesh.serial, sizeof mesh.serial);
+    h = hash_bytes(h, grid, sizeof grid);
+    h = hash_bytes(h, &d.tint, sizeof d.tint);
+    h = hash_bytes(h, materials, mesh.materials * sizeof *materials);
+    h = hash_bytes(h, textures, mesh.materials * sizeof *textures);
+    h = hash_bytes(h, &shade.ambient,
+                   sizeof shade - (reinterpret_cast<const uint8_t *>(&shade.ambient) -
+                                   reinterpret_cast<const uint8_t *>(&shade)));
+    if (lights != nullptr) {
+        uint32_t count = lights->count < SA_LIGHTS ? lights->count : SA_LIGHTS;
+
+        h = hash_bytes(h, &count, sizeof count);
+        h = hash_bytes(h, lights->light, count * sizeof lights->light[0]);
+    }
+    if (shade.mode == SA_SHADE_PALETTE) {
+        h = hash_bytes(h, &palettes_key_, sizeof palettes_key_);
+    }
+    if (env) {
+        h = hash_bytes(h, look(), 12 * sizeof(float));
+    }
+    return h != 0 ? h : 1;
+}
+
+/* the last picture's corners for the draw of key, given again as placed()
+ * gave them, where the last picture has them */
+bool Scene::replay(uint64_t key, const sa_draw &d, const sa_shade &shade)
+{
+    uint32_t found = last_keys_.find(key, last_placings_);
+
+    if (found == 0) {
+        return false;
+    }
+    const Placing &was = last_placings_[found - 1];
+
+    if (!close(was.world, d.object_to_world, was.light, shade.light)) {
+        return false;
+    }
+    Placing now = was;
+
+    now.runs = static_cast<uint32_t>(runs_.size());
+    for (uint32_t r = 0; r < was.run_count; r++) {
+        const Run &run = last_runs_[was.runs + r];
+
+        if (batches_.empty() || memcmp(&batches_.back().state, &run.state, sizeof run.state) != 0 ||
+            batches_.back().first + batches_.back().count != vertices_.size()) {
+            Batch fresh;
+
+            fresh.state = run.state;
+            fresh.first = static_cast<uint32_t>(vertices_.size());
+            batches_.push_back(fresh);
+        }
+        runs_.push_back(Run{run.state, static_cast<uint32_t>(vertices_.size()), run.count});
+        vertices_.insert(vertices_.end(), last_vertices_.begin() + run.first,
+                         last_vertices_.begin() + run.first + run.count);
+        batches_.back().count += run.count;
+    }
+    const float *w = d.object_to_world;
+    float origin[3] = {w[3], w[7], w[11]};
+    float draw_z = view_z(origin);
+
+    now.blends = static_cast<uint32_t>(blend_list_.size());
+    for (uint32_t i = 0; i < was.blend_count; i++) {
+        BlendTriangle t = last_blend_list_[was.blends + i];
+
+        t.draw_z = draw_z;
+        t.own_z = (view_z(t.corners[0].at) + view_z(t.corners[1].at) + view_z(t.corners[2].at)) /
+                  3.0F;
+        blend_list_.push_back(t);
+    }
+    triangle_count_ += was.triangles;
+    reused_points_ += was.points;
+    placings_.push_back(now);
+    keys_.add(key, static_cast<uint32_t>(placings_.size() - 1));
+    return true;
+}
+
 void Scene::begin(const sa_picture &picture)
 {
+    if (reuse_) {
+        /* the picture past keeps its draws for this one to take */
+        std::swap(last_vertices_, vertices_);
+        std::swap(last_blend_list_, blend_list_);
+        std::swap(last_runs_, runs_);
+        std::swap(last_placings_, placings_);
+        std::swap(last_keys_, keys_);
+        runs_.clear();
+        placings_.clear();
+        keys_.clear();
+        if (vertices_.capacity() < MOST_TRIANGLES * 3) {
+            vertices_.reserve(MOST_TRIANGLES * 3);
+            blend_list_.reserve(MOST_TRIANGLES);
+        }
+    }
     picture_ = picture;
     lenses_.clear();
     view(picture.view);
@@ -416,6 +630,23 @@ void Scene::placed(const sa_draw &d, const MeshView &mesh,
             scan += meshset_bytes(head);
         }
     }
+    uint64_t key = 0;
+    Placing placing{};
+
+    if (reuse_ && mesh.serial != 0) {
+        key = key_of(d, mesh, materials, textures, shade, lights, want_env);
+        if (replay(key, d, shade)) {
+            return;
+        }
+        placing.key = key;
+        memcpy(placing.world, d.object_to_world, sizeof placing.world);
+        memcpy(placing.light, shade.light, sizeof placing.light);
+        placing.runs = static_cast<uint32_t>(runs_.size());
+        placing.blends = static_cast<uint32_t>(blend_list_.size());
+        placing.triangles = triangle_count_;
+        placing.points = points;
+    }
+    worked_points_ += points;
 
     for (uint32_t i = 0; i < points; i++) {
         const float *p = &mesh.points[i * 3];
@@ -526,6 +757,8 @@ void Scene::placed(const sa_draw &d, const MeshView &mesh,
             fresh.first = static_cast<uint32_t>(vertices_.size());
             batches_.push_back(fresh);
         }
+        uint32_t run_first = static_cast<uint32_t>(vertices_.size());
+
         for (uint32_t c = 0; c + 2 < head.corners; c += 3) {
             for (int k = 0; k < 3; k++) {
                 uint32_t i = corners[c + k];
@@ -600,6 +833,17 @@ void Scene::placed(const sa_draw &d, const MeshView &mesh,
             }
             triangle_count_++;
         }
+        if (key != 0 && !blended && vertices_.size() > run_first) {
+            runs_.push_back(Run{state, run_first,
+                                static_cast<uint32_t>(vertices_.size()) - run_first});
+        }
+    }
+    if (key != 0) {
+        placing.run_count = static_cast<uint32_t>(runs_.size()) - placing.runs;
+        placing.blend_count = static_cast<uint32_t>(blend_list_.size()) - placing.blends;
+        placing.triangles = triangle_count_ - placing.triangles;
+        placings_.push_back(placing);
+        keys_.add(key, static_cast<uint32_t>(placings_.size() - 1));
     }
 }
 
@@ -911,7 +1155,9 @@ void Scene::finish()
         for (const BlendTriangle &t : blend_list_) {
             add(vertices_, batches_, t.state, t.corners, 3);
         }
-        blend_list_.clear();
+        if (!reuse_) {
+            blend_list_.clear();
+        }
         return;
     }
     bool by_draw = blend_ == SA_PC_BLEND_DRAW;
@@ -947,7 +1193,10 @@ void Scene::finish()
 
         add(vertices_, batches_, t.state, t.corners, 3);
     }
-    blend_list_.clear();
+    /* under reuse, the next picture's begin() keeps it for its replays */
+    if (!reuse_) {
+        blend_list_.clear();
+    }
 }
 
 void Scene::uniform(PictureUniform &u) const
