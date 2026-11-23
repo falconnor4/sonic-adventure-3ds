@@ -221,8 +221,14 @@ void native_vsync(void)
             extern void sa3ds_batch_counts(uint64_t out[5]);
             uint64_t counts[5];
 
-            native_log("sa3ds: the GPU's command buffer at most %d%% full, %lu batches dropped",
-                       (int)(peak * 100.0F), (unsigned long)dropped);
+            extern void sa3ds_unsent(uint32_t *triangles, uint32_t *views);
+            uint32_t unsent = 0, views = 0;
+
+            sa3ds_unsent(&unsent, &views);
+            native_log("sa3ds: the GPU's command buffer at most %d%% full, %lu batches dropped, "
+                       "%lu triangles and %lu views it can't take left out",
+                       (int)(peak * 100.0F), (unsigned long)dropped, (unsigned long)unsent,
+                       (unsigned long)views);
             sa3ds_batch_counts(counts);
             native_log("sa3ds: draws %llu, textures bound %llu, combiners %llu, blends %llu, "
                        "depths %llu",

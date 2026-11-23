@@ -149,6 +149,11 @@ struct Backend {
     int place_uniform = 0;
     float world_place[16] = {};
     float camera[3] = {};
+    /* a world point a little ahead of the camera, less its point: where
+     * guard puts a triangle it can't send. world_bad holds where the
+     * picture's view gives rows the GPU can't take */
+    float ahead[3] = {};
+    bool world_bad = false;
     DVLB_s *shader_dvlb = nullptr;
     shaderProgram_s program;
     C3D_AttrInfo attributes;
@@ -417,6 +422,48 @@ void combine(uint32_t flags, bool textured)
  * the top screen's framebuffer is turned a quarter, so clip x runs up the
  * picture and clip y to its left. a texture's rows lie from the bottom up,
  * and its t runs the same way, so a picture's v is t as it is */
+/* the triangles guard collapsed since the log last read them, and the
+ * pictures whose view it found the GPU can't take */
+uint32_t unsent_triangles, unsent_views;
+
+/* whether the PICA200 takes these: finite, and short of 2^40, where its
+ * 24-bit floats' products would pass their range. a NaN or an infinity in a
+ * corner can stop the GPU for good, where the Dreamcast's PowerVR draws
+ * nothing of its triangle; the game makes some, as at Casinopolis's switch */
+inline bool sendable(float x, float y, float z)
+{
+    uint32_t a, b, c;
+
+    memcpy(&a, &x, 4);
+    memcpy(&b, &y, 4);
+    memcpy(&c, &z, 4);
+    uint32_t most = std::max(a & 0x7f800000U, std::max(b & 0x7f800000U, c & 0x7f800000U));
+
+    return most < (127U + 40U) << 23;
+}
+
+/* the triangles of count corners at out that any corner of keeps from the
+ * GPU, each collapsed to safe, which draws nothing */
+void guard(Corner *out, uint32_t count, const float *safe)
+{
+    for (uint32_t i = 0; i + 2 < count; i += 3) {
+        Corner *t = out + i;
+
+        if (sendable(t[0].at[0], t[0].at[1], t[0].at[2]) &&
+            sendable(t[1].at[0], t[1].at[1], t[1].at[2]) &&
+            sendable(t[2].at[0], t[2].at[1], t[2].at[2])) {
+            continue;
+        }
+        for (int k = 0; k < 3; k++) {
+            t[k].at[0] = safe[0];
+            t[k].at[1] = safe[1];
+            t[k].at[2] = safe[2];
+            t[k].at[3] = 1.0F;
+        }
+        unsent_triangles++;
+    }
+}
+
 inline void place(const pc::Vertex &v, bool screen, const float *view,
                   const sa_view &lens, const float *camera, Corner &out)
 {
@@ -506,10 +553,20 @@ void world_place(Backend &b, const float *view)
     rows[1][3] = left[2] - (lens.focal[0] * left[0] + lens.center[0] * left[2]) / 320.0;
     rows[2][3] = -NEAR;
     rows[3][3] = left[2];
+    b.world_bad = !sendable(b.camera[0], b.camera[1], b.camera[2]);
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
             b.world_place[i * 4 + j] = (float)rows[i][j];
         }
+        b.world_bad |= !sendable(b.world_place[i * 4], b.world_place[i * 4 + 1],
+                                 b.world_place[i * 4 + 2]) ||
+                       !sendable(b.world_place[i * 4 + 3], 0.0F, 0.0F);
+    }
+    /* the view's z row, as a world direction, at 4 NEAR ahead */
+    double length = sqrt(r[2][0] * r[2][0] + r[2][1] * r[2][1] + r[2][2] * r[2][2]);
+
+    for (int j = 0; j < 3; j++) {
+        b.ahead[j] = length > 0.0 ? (float)(r[2][j] / length * 4.0 * NEAR) : 0.0F;
     }
 }
 
@@ -584,6 +641,10 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
         const pc::State &s = batch.state;
         float shift = s.flags & pc::BATCH_SCREEN ? 0.0F : separation;
         int world = (s.flags & pc::BATCH_SCREEN) ? 0 : 1;
+
+        if (world && b.world_bad) {
+            continue;
+        }
 
         if (world != placed_world) {
             set_place(b, world != 0);
@@ -722,6 +783,12 @@ void render(Backend &b)
 
     top.clear();
     under.clear();
+    /* a clip space point at the near plane, for a screen corner guard drops */
+    static const float screen_safe[3] = {0.0F, 0.0F, -NEAR};
+
+    if (b.world_bad) {
+        unsent_views++;
+    }
     for (const pc::Batch &batch : batches) {
         bool screen = (batch.state.flags & pc::BATCH_SCREEN) != 0;
 
@@ -740,12 +807,14 @@ void render(Backend &b)
                     place_bottom(tri[k], x > 320.0F, y > 240.0F, b.corners[sent + i + k]);
                 }
             }
+            guard(&b.corners[sent], batch.count / 3 * 3, screen_safe);
             under.push_back(Placed{&batch, sent, batch.count / 3 * 3});
         } else {
             for (uint32_t i = 0; i < batch.count; i++) {
                 place(vertices[batch.first + i], screen, u.view, b.lens, b.camera,
                       b.corners[sent + i]);
             }
+            guard(&b.corners[sent], batch.count, screen ? screen_safe : b.ahead);
             top.push_back(Placed{&batch, sent, batch.count});
         }
         sent += batch.count;
@@ -1126,6 +1195,13 @@ void sa3ds_batch_counts(uint64_t out[5])
 {
     memcpy(out, batch_counts, sizeof batch_counts);
     memset(batch_counts, 0, sizeof batch_counts);
+}
+
+void sa3ds_unsent(uint32_t *triangles, uint32_t *views)
+{
+    *triangles = unsent_triangles;
+    *views = unsent_views;
+    unsent_triangles = unsent_views = 0;
 }
 
 float sa3ds_cmdbuf_peak(uint32_t *dropped)
