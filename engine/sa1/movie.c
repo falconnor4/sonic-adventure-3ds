@@ -91,6 +91,10 @@ struct player {
     plm_video_t *video;
     uint8_t *adx;
     int pictures, decoded;
+    /* where adx is null, the disc's file its sound streams from, at
+     * sound_at for sound_bytes, under SA_3DS */
+    char sound_file[32];
+    uint32_t sound_at, sound_bytes;
     double rate; /* pictures a second */
     ADXT talk;
     /* the picture the texture holds, -1 for none */
@@ -136,9 +140,77 @@ void stage_set_stage_act(uint8_t stage, uint8_t act);
  * p->adx is null where the sound's bytes hold no ADX file whole, since
  * ADXT_StartMem reads one to the length its header gives. it returns 0 where
  * it can't read the file, or finds no pictures or frame rate */
+/* the movie split as a host may split it (engine/3ds/host/movies.c): NAME.M1V
+ * its video, read as it plays, and NAME.MVA a head of "MVA1" and the
+ * pictures' count, then its ADX sound whole. a whole SFD outruns the 3DS's
+ * memory. it returns 0 where the two aren't there or don't serve */
+static int movie_open_split(struct player *p, const char *name)
+{
+    char video_name[32], sound_name[32];
+    size_t length = strcspn(name, ".");
+    FILE *video, *sound;
+    uint8_t head[8];
+    long size;
+
+    if (length + 5 > sizeof video_name) {
+        return 0;
+    }
+    snprintf(video_name, sizeof video_name, "%.*s.M1V", (int)length, name);
+    snprintf(sound_name, sizeof sound_name, "%.*s.MVA", (int)length, name);
+    if (!(sound = native_disc_file(sound_name))) {
+        return 0;
+    }
+    if (!(video = native_disc_file(video_name))) {
+        fclose(sound);
+        return 0;
+    }
+    if (fseek(sound, 0, SEEK_END) != 0 || (size = ftell(sound)) <= (long)sizeof head ||
+        fseek(sound, 0, SEEK_SET) != 0 || fread(head, 1, sizeof head, sound) != sizeof head ||
+        memcmp(head, "MVA1", 4) != 0) {
+        fclose(sound);
+        fclose(video);
+        return 0;
+    }
+    p->pictures = head[4] | head[5] << 8 | head[6] << 16 | head[7] << 24;
+#ifdef SA_3DS
+    /* the 3DS streams it from the file, as it streams a song */
+    fclose(sound);
+    memcpy(p->sound_file, sound_name, sizeof p->sound_file);
+    p->sound_at = sizeof head;
+    p->sound_bytes = (uint32_t)size - sizeof head;
+#else
+    if (!(p->adx = malloc((size_t)size - sizeof head)) ||
+        fread(p->adx, 1, (size_t)size - sizeof head, sound) != (size_t)size - sizeof head) {
+        fclose(sound);
+        fclose(video);
+        free(p->adx);
+        p->adx = NULL;
+        return 0;
+    }
+    fclose(sound);
+    if (!sa1_adx_whole(p->adx, (size_t)size - sizeof head)) {
+        free(p->adx);
+        p->adx = NULL;
+    }
+#endif
+    p->video = plm_video_create_with_buffer(plm_buffer_create_with_file(video, 1), 1);
+    p->rate = plm_video_get_framerate(p->video);
+    p->decoded = 0;
+    p->shown = -1;
+    return p->rate > 0 && p->pictures > 0;
+}
+
 static int movie_open(struct player *p, const char *name)
 {
-    FILE *file = native_disc_file(name);
+    FILE *file;
+
+    if (movie_open_split(p, name)) {
+        return 1;
+    }
+    if (p->video || p->adx || p->sound_file[0]) {
+        return 0;
+    }
+    file = native_disc_file(name);
     uint8_t *bytes;
     long size;
     size_t adx_bytes = 0, adx_room = 1 << 20;
@@ -444,6 +516,8 @@ static void movie_run(int list, int current)
     Sint32 ncount, tscale;
 
     if (!movie_open(&p, movies[current].file)) {
+        fprintf(stderr, "sa1: movie %s can't play: unread, or no memory for it\n",
+                movies[current].file);
         movie_close(&p);
         movie_result = 0;
         return;
@@ -467,12 +541,19 @@ static void movie_run(int list, int current)
              * list. so does one whose file ADXT_StartMem starts no sound
              * from. in MOVIE.BIN, an ADX that fails to decode does. p.volume
              * is 0 unless a skip has lowered it */
-            if (!p.adx || !(p.talk = ADXT_Create(2, NULL, 0))) {
+            if ((!p.adx && !p.sound_file[0]) || !(p.talk = ADXT_Create(2, NULL, 0))) {
                 movie_result = 0;
                 break;
             }
             ADXT_SetOutVol(p.talk, p.volume);
-            ADXT_StartMem(p.talk, p.adx);
+#ifdef SA_3DS
+            if (p.sound_file[0]) {
+                sa1_adx_start_file(p.talk, p.sound_file, (long)p.sound_at, p.sound_bytes);
+            } else
+#endif
+            {
+                ADXT_StartMem(p.talk, p.adx);
+            }
             if (ADXT_GetStat(p.talk) == ADXT_STAT_STOP) {
                 movie_result = 0;
                 break;

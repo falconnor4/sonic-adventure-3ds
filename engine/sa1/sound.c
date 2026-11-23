@@ -628,6 +628,15 @@ static void start_file(struct talk *talk, const char *name, long offset,
 }
 #endif
 
+#ifdef SA_3DS
+void sa1_adx_start_file(void *adxt, const char *name, long offset, size_t size)
+{
+    if (adxt) {
+        start_file((struct talk *)adxt, name, offset, size, 0);
+    }
+}
+#endif
+
 void ADXT_StartFname(ADXT adxt, char *fname)
 {
     if (adxt) {

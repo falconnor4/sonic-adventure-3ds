@@ -534,6 +534,13 @@ $(3DS_ART)/banner.bnr: $(BANNERTOOL) $(3DS_ART)/banner-shown.png $(3DS_ART)/bann
 	@$(call status,banner,$@)
 	$(Q)$(BANNERTOOL) makebanner -i $(3DS_ART)/banner-shown.png -a $(3DS_ART)/banner.wav -o $@ > /dev/null
 
+# the movies' splitter (engine/3ds/host/movies.c), made on the host with CC
+3DS_MOVIES := $(3DS_DIR)/host/movies
+$(3DS_MOVIES): engine/3ds/host/movies.c tools/pl_mpeg/pl_mpeg.h
+	@$(call status,cc,$@)
+	$(Q)mkdir -p $(@D)
+	$(Q)$(CC) -std=c11 -O2 -Itools/pl_mpeg -o $@ $< -lm
+
 # the ELF makerom reads: the image's without the programs' data, which lies in
 # the RomFS, their sections' relocations and the debugging information
 3DS_CIA_ELF := $(3DS_DIR)/sa3ds-cia.elf
@@ -546,7 +553,7 @@ $(3DS_CIA_ELF): $(3DS_ELF)
 # copied. the .gdi's tracks stay out: the game reads the files alone
 3DS_CIA_ROMFS := $(3DS_DIR)/romfs-cia
 $(3DS_DIR)/romfs-cia.txt: $(3DS_ROMFS)/symbols.bin $(3DS_ROMFS)/programs.txt $(3DS_ROMFS)/textures.idx \
-		$(3DS_ROMFS)/textures.gpu \
+		$(3DS_ROMFS)/textures.gpu $(3DS_MOVIES) \
 		$(NATIVE_DISC)/1ST_READ.BIN
 	@$(call status,romfs,$(3DS_CIA_ROMFS))
 	$(Q)rm -rf $(3DS_CIA_ROMFS) && mkdir -p $(3DS_CIA_ROMFS)/disc
@@ -554,6 +561,9 @@ $(3DS_DIR)/romfs-cia.txt: $(3DS_ROMFS)/symbols.bin $(3DS_ROMFS)/programs.txt $(3
 	$(Q)cd $(NATIVE_DISC) && find . -type f ! -name 'track*' ! -iname '*.gdi' -print0 | \
 		xargs -0 sh -c 'cp -al --parents "$$@" $(abspath $(3DS_CIA_ROMFS))/disc 2>/dev/null || \
 			cp -a --parents "$$@" $(abspath $(3DS_CIA_ROMFS))/disc' copy
+	@# each movie beside its SFD, split into its video and its sound
+	$(Q)cd $(3DS_CIA_ROMFS)/disc && find . -type f -iname '*.sfd' | while read -r sfd; do \
+		$(abspath $(3DS_MOVIES)) "$$(dirname "$$sfd")" "$$sfd" || exit 1; done
 	$(Q)touch $@
 
 3DS_CIA := $(3DS_DIR)/sa3ds.cia

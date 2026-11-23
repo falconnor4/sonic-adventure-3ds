@@ -61,7 +61,10 @@ static void next_keys(void)
 
 void (*native_pad_read)(void *pad);
 
-void __wrap_pad_scan(void)
+/* TRUE where the server has read the pad since the game's last scan */
+static int served;
+
+static void read_pads(void)
 {
     if (native_pad_read && pad_record) {
         native_pad_read(pad_record);
@@ -70,6 +73,29 @@ void __wrap_pad_scan(void)
         next_keys();
         sa1_chord(pad_record);
     }
+}
+
+/* the Dreamcast's peripheral server reads the ports as each frame ends, and
+ * between a frame's steps, and a press lasts until its next read. the
+ * stage's frame takes the press as it begins, before its first scan, and
+ * adds those of the reads between its steps. so the pad is read here, as
+ * the server reads it: read only at the game's scan, a press the pause
+ * menu took stayed in the record into the next frame, whose start took it
+ * again and opened the menu once more */
+void pdExecPeripheralServer(void)
+{
+    read_pads();
+    served = 1;
+}
+
+/* the game's scan reads the pad itself only where no serve came since its
+ * last, as in a loop of the game's own that never ends a frame */
+void __wrap_pad_scan(void)
+{
+    if (!served) {
+        read_pads();
+    }
+    served = 0;
     native_hook_pad_scan(pad_record);
     __real_pad_scan();
     native_hook_pad_scanned();

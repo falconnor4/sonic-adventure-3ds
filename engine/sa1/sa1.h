@@ -78,5 +78,11 @@ void sa1_simple_light(double light[3], float *ambient, float *diffuse);
 /* TRUE where the held bytes at adx hold an ADX file whole, by the length its
  * header gives. sound.c's ADXT_StartMem reads a file to that length */
 int sa1_adx_whole(const void *adx, size_t held);
+#ifdef SA_3DS
+/* play the ADX file of size bytes at offset in the disc's file name, read as
+ * it plays, as the 3DS plays its songs: a movie's sound is past the room its
+ * sound's ring has for one in memory */
+void sa1_adx_start_file(void *adxt, const char *name, long offset, size_t size);
+#endif
 
 #endif

@@ -56,7 +56,6 @@ eggmanrobo_bss_end                   address      *        the end of Zero's ima
 e101_r_bss_end                       address      *        the end of E-101 mkII's image, past which it reads its files (modules/b_e101_r/files.c)
 # The frame's end (src/system/frame.c, src/system/present.c, src/system/timer.c)
 kmFlipFrameBuffer                    function     *        shows the frame Kamui has rendered. frame_wait and the split frame's middle call it past kmRender, where the adapter has taken the picture for the backend to show (engine/sa1/records.c)
-pdExecPeripheralServer               function     *        has the peripheral library read the ports, once a frame. The shim reads the pad where the game scans it (engine/native/pads.c)
 kmSetEORCallback                     function     *        has Kamui call timer.c at each render's end, which times the render (src/system/timer.c). No render ends here, and the callback never runs
 njWaitVSync                          unsupported  *        Ninja's wait for the vertical blank, with its render and its flip. Ninja's own is ninja_wait_vsync here. The game's frames wait in frame_wait, which the adapter takes. An event's load, the movie's start and the debug host's requests wait by this name (src/event/play.c, src/progress/movie.c, src/debug/host.c), and go on at once
 kmiIntStatisticData                  zeros        *        Kamui's times of the tile accelerator's intake and of the render. The split frame weighs its second picture by them (src/system/present.c), and a host has neither to time
