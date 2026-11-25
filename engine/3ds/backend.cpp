@@ -673,7 +673,13 @@ float cmdbuf_peak;
  * draws, textures bound, combiners, blends, depths */
 uint64_t batch_counts[5];
 
-void draw_batches(Backend &b, const std::vector<Placed> &placed, float separation)
+/* a single-sided face that turns away goes, as the PC's raster drops it: its
+ * front winds counter-clockwise on the screen, y up. place's turn of the
+ * picture onto the GPU's axes keeps a winding, as Mtx_PerspTilt's does.
+ * without it, a translucent shape showed its inside through its outside.
+ * the bottom screen's HUD, which place_bottom moves, culls nothing */
+void draw_batches(Backend &b, const std::vector<Placed> &placed, float separation,
+                  bool culls)
 {
     /* the state the last batch set, so a batch sets only what differs: each
      * of citro3d's calls marks state the next draw sends the GPU again */
@@ -681,6 +687,7 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
     int placed_world = -1;
     uint32_t bound = UINT32_MAX, sampled = UINT32_MAX, combined = UINT32_MAX;
     uint32_t blended = UINT32_MAX, tested = UINT32_MAX;
+    int culled = 0;
 
     for (const Placed &p : placed) {
         const pc::Batch &batch = *p.batch;
@@ -740,13 +747,22 @@ void draw_batches(Backend &b, const std::vector<Placed> &placed, float separatio
             }
             blended = blend_key;
         }
-        uint32_t depth_key = (uint32_t)s.depth << 1 | s.depth_write;
+        /* a blend's triangles come farthest first, and write no depth, as
+         * the PC's blend list writes none: one written would cut the rest of
+         * the blend that lies behind it out where the sort put it first */
+        bool writes = s.depth_write && !s.blend;
+        uint32_t depth_key = (uint32_t)s.depth << 1 | writes;
 
         if (depth_key != tested) {
             batch_counts[4]++;
-            C3D_DepthTest(true, depth_func(s.depth),
-                          s.depth_write ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
+            C3D_DepthTest(true, depth_func(s.depth), writes ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
             tested = depth_key;
+        }
+        int cull = culls && s.cull;
+
+        if (cull != culled) {
+            C3D_CullFace(cull ? GPU_CULL_BACK_CCW : GPU_CULL_NONE);
+            culled = cull;
         }
         if (C3D_GetCmdBufUsage() >= CMDBUF_FULL) {
             dropped_batches += (uint32_t)(&placed.back() - &p) + 1;
@@ -893,16 +909,17 @@ void render(Backend &b)
         C3D_DepthMap(true, -1.0F, 0.0F);
         C3D_CullFace(GPU_CULL_NONE);
         sa3ds_draw_step = 4;
-        draw_batches(b, top, eyes == 2 ? separation : 0.0F);
+        draw_batches(b, top, eyes == 2 ? separation : 0.0F, true);
     }
     /* the bottom screen: its backdrop, and over it the HUD in play */
     C3D_RenderTargetClear(b.bottom, C3D_CLEAR_ALL, 0x000000ff, 0);
     C3D_FrameDrawOn(b.bottom);
+    C3D_CullFace(GPU_CULL_NONE);
     if (sent > drop) {
         draw_backdrop(b, drop);
     }
     sa3ds_draw_step = 5;
-    draw_batches(b, under, 0.0F);
+    draw_batches(b, under, 0.0F, false);
     sa3ds_draw_step = 6;
     cmdbuf_peak = std::max(cmdbuf_peak, C3D_GetCmdBufUsage());
     sa3ds_ticks_parts[3] += svcGetSystemTick() - part_at;
