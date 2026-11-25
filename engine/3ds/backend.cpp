@@ -424,7 +424,7 @@ void combine(uint32_t flags, bool textured)
  * and its t runs the same way, so a picture's v is t as it is */
 /* the triangles guard collapsed since the log last read them, and the
  * pictures whose view it found the GPU can't take */
-uint32_t unsent_triangles, unsent_views;
+uint32_t unsent_triangles, unsent_views, uv_unsent, uv_moved;
 /* the meshes made, each one's number */
 uint64_t mesh_serial;
 /* the times the DSP played out every buffer before the sound's thread gave
@@ -448,19 +448,59 @@ inline bool sendable(float x, float y, float z)
     return most < (127U + 40U) << 23;
 }
 
+/* texture coordinates past UV_FAR go back toward 0 by a whole number of
+ * the texture's repeats, an even one, which leaves a mirrored wrap as it was
+ * too. a triangle whose coordinates span UV_SPAN or more, or that holds a
+ * NaN or an infinity, the texture unit can't take: the PICA200's float24
+ * sampler stops on them, where the PowerVR samples something */
+constexpr float UV_FAR = 256.0F;
+constexpr float UV_SPAN = 4096.0F;
+
+/* whether a triangle's texture coordinates can go, after a shift toward 0 */
+inline bool uv_sendable(Corner *t)
+{
+    bool far = false;
+
+    for (int a = 0; a < 2; a++) {
+        float lo = std::min(t[0].uv[a], std::min(t[1].uv[a], t[2].uv[a]));
+        float hi = std::max(t[0].uv[a], std::max(t[1].uv[a], t[2].uv[a]));
+
+        /* false for a NaN, as each comparison is */
+        if (!(hi - lo < UV_SPAN)) {
+            return false;
+        }
+        if (lo > -UV_FAR && hi < UV_FAR) {
+            continue;
+        }
+        float shift = 2.0F * floorf(lo * 0.5F);
+
+        for (int k = 0; k < 3; k++) {
+            t[k].uv[a] -= shift;
+        }
+        far = true;
+    }
+    uv_moved += far;
+    return true;
+}
+
 /* the triangles of count corners at out that any corner of keeps from the
  * GPU, each collapsed to safe, which draws nothing */
 void guard(Corner *out, uint32_t count, const float *safe)
 {
     for (uint32_t i = 0; i + 2 < count; i += 3) {
         Corner *t = out + i;
+        bool placed = sendable(t[0].at[0], t[0].at[1], t[0].at[2]) &&
+                      sendable(t[1].at[0], t[1].at[1], t[1].at[2]) &&
+                      sendable(t[2].at[0], t[2].at[1], t[2].at[2]);
 
-        if (sendable(t[0].at[0], t[0].at[1], t[0].at[2]) &&
-            sendable(t[1].at[0], t[1].at[1], t[1].at[2]) &&
-            sendable(t[2].at[0], t[2].at[1], t[2].at[2])) {
+        if (placed && uv_sendable(t)) {
             continue;
         }
+        if (placed) {
+            uv_unsent++;
+        }
         for (int k = 0; k < 3; k++) {
+            t[k].uv[0] = t[k].uv[1] = 0.0F;
             t[k].at[0] = safe[0];
             t[k].at[1] = safe[1];
             t[k].at[2] = safe[2];
@@ -821,7 +861,7 @@ void render(Backend &b)
                       b.corners[sent + i]);
             }
             guard(&b.corners[sent], batch.count, screen ? screen_safe : b.ahead);
-            top.push_back(Placed{&batch, sent, batch.count});
+            top.push_back(Placed{&batch, sent, batch.count / 3 * 3});
         }
         sent += batch.count;
     }
@@ -1224,11 +1264,13 @@ void sa3ds_reuse(uint64_t *worked, uint64_t *reused)
     reuse_worked = reuse_reused = 0;
 }
 
-void sa3ds_unsent(uint32_t *triangles, uint32_t *views)
+void sa3ds_unsent(uint32_t *triangles, uint32_t *views, uint32_t *uv_out, uint32_t *moved)
 {
     *triangles = unsent_triangles;
     *views = unsent_views;
-    unsent_triangles = unsent_views = 0;
+    *uv_out = uv_unsent;
+    *moved = uv_moved;
+    unsent_triangles = unsent_views = uv_unsent = uv_moved = 0;
 }
 
 float sa3ds_cmdbuf_peak(uint32_t *dropped)

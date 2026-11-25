@@ -947,7 +947,36 @@ static void snap_palettes(void)
  * picture. Sky Deck's sky sets the unlit offsets for its own draw alone. so
  * where either palette or those offsets changed since the last version given,
  * the palettes get a new version */
-static void palettes_drawn(uint32_t palette, int32_t points)
+#ifdef SA_3DS
+/* the palettes' new versions given */
+uint32_t sa3ds_palette_versions;
+#endif
+
+/* whether words words at a and b are alike: the 3DS's newlib compares a word
+ * an iteration, and a palette draw compares thousands of them, each draw */
+static int words_alike(const uint32_t *a, const uint32_t *b, size_t words)
+{
+    size_t i = 0;
+
+    for (; i + 8 <= words; i += 8) {
+        uint32_t d = (a[i] ^ b[i]) | (a[i + 1] ^ b[i + 1]) |
+                     (a[i + 2] ^ b[i + 2]) | (a[i + 3] ^ b[i + 3]) |
+                     (a[i + 4] ^ b[i + 4]) | (a[i + 5] ^ b[i + 5]) |
+                     (a[i + 6] ^ b[i + 6]) | (a[i + 7] ^ b[i + 7]);
+
+        if (d != 0) {
+            return 0;
+        }
+    }
+    for (; i < words; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void palettes_drawn(uint32_t palette, int32_t points, int specular)
 {
     enum { PALETTE_WORDS = SA_CAP_PALETTE_ENTRIES * 2 };
     const size_t unlit = SA_CAP_PALETTES_COUNT * PALETTE_WORDS;
@@ -956,10 +985,13 @@ static void palettes_drawn(uint32_t palette, int32_t points)
                      : points > SA_CAP_UNLIT_OFFSETS ? SA_CAP_UNLIT_OFFSETS
                                                      : (size_t)points;
 
-    if (memcmp(&palettes_words[from], &sa1_live_colors[from],
-               2 * PALETTE_WORDS * sizeof palettes_words[0]) != 0 ||
-        memcmp(&palettes_words[unlit], &sa1_live_colors[unlit],
-               offsets * sizeof palettes_words[0]) != 0) {
+    if (!words_alike(&palettes_words[from], &sa1_live_colors[from],
+                     (specular ? 2 : 1) * PALETTE_WORDS) ||
+        !words_alike(&palettes_words[unlit], &sa1_live_colors[unlit],
+                     offsets)) {
+#ifdef SA_3DS
+        sa3ds_palette_versions++;
+#endif
         snap_palettes();
     }
 }
@@ -1750,7 +1782,21 @@ static void record_model(const NJS_MODEL *model, uint8_t mode,
     struct draw_state state = state_now(header, attrs);
 
     if (mode == SA_SHADE_PALETTE) {
-        palettes_drawn(state.palette, model->nbPoint);
+        /* specular as model_draw finds it, by the first meshset's material,
+         * where the draw reads the palette after its own. without materials
+         * to tell, both */
+        int specular = 1;
+
+        if (model->mats != NULL && model->meshsets != NULL &&
+            materials_named(model) != 0) {
+            const NJS_MATERIAL *first =
+                &model->mats[model->meshsets->type_matId & MATERIAL_ID];
+
+            specular = !(flags_as_drawn(attrs, first->attrflags) &
+                         NJD_FLAG_IGNORE_SPECULAR) &&
+                       first->specular.color != 0;
+        }
+        palettes_drawn(state.palette, model->nbPoint, specular);
     }
     to_world(draw.object_to_world);
 #ifdef SA_3DS

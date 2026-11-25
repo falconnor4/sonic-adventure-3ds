@@ -197,10 +197,14 @@ void native_vsync(void)
                        sa3ds_ticks_model_parts[2] * ms, sa3ds_ticks_model_parts[3] * ms);
             memset(sa3ds_ticks_model_parts, 0, sizeof sa3ds_ticks_model_parts);
 
+            extern uint32_t sa3ds_palette_versions;
+
             native_log("sa3ds: the game's capture: models %.2f, of which their hashes %.2f; "
-                       "sprites %.2f; triangles %.2f",
+                       "sprites %.2f; triangles %.2f; %lu new palettes",
                        sa3ds_ticks_capture[0] * ms, sa3ds_ticks_capture[1] * ms,
-                       sa3ds_ticks_capture[2] * ms, sa3ds_ticks_capture[3] * ms);
+                       sa3ds_ticks_capture[2] * ms, sa3ds_ticks_capture[3] * ms,
+                       (unsigned long)sa3ds_palette_versions);
+            sa3ds_palette_versions = 0;
             memset(sa3ds_ticks_capture, 0, sizeof sa3ds_ticks_capture);
 
             native_log("sa3ds: of which the meshes' points %.2f; C3D_FrameBegin %.2f, the scene's "
@@ -229,14 +233,16 @@ void native_vsync(void)
             extern void sa3ds_batch_counts(uint64_t out[5]);
             uint64_t counts[5];
 
-            extern void sa3ds_unsent(uint32_t *triangles, uint32_t *views);
-            uint32_t unsent = 0, views = 0;
+            extern void sa3ds_unsent(uint32_t *triangles, uint32_t *views, uint32_t *uv_out,
+                                     uint32_t *moved);
+            uint32_t unsent = 0, views = 0, uv_out = 0, moved = 0;
 
-            sa3ds_unsent(&unsent, &views);
+            sa3ds_unsent(&unsent, &views, &uv_out, &moved);
             native_log("sa3ds: the GPU's command buffer at most %d%% full, %lu batches dropped, "
-                       "%lu triangles and %lu views it can't take left out",
+                       "%lu triangles and %lu views it can't take left out, %lu triangles "
+                       "for their texture's places, %lu with them moved back",
                        (int)(peak * 100.0F), (unsigned long)dropped, (unsigned long)unsent,
-                       (unsigned long)views);
+                       (unsigned long)views, (unsigned long)uv_out, (unsigned long)moved);
             sa3ds_batch_counts(counts);
             native_log("sa3ds: draws %llu, textures bound %llu, combiners %llu, blends %llu, "
                        "depths %llu",
