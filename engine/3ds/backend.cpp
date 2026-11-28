@@ -432,10 +432,12 @@ uint64_t mesh_serial;
  * them, and the log */
 volatile uint32_t audio_underruns, audio_underruns_logged;
 
-/* whether the PICA200 takes these: finite, and short of 2^40, where its
- * 24-bit floats' products would pass their range. a NaN or an infinity in a
- * corner can stop the GPU for good, where the Dreamcast's PowerVR draws
- * nothing of its triangle; the game makes some, as at Casinopolis's switch */
+/* whether the PICA200 takes these: finite, and short of 2^24. the shader
+ * multiplies a corner by world_place's rows, which hold to the same bound, so
+ * a product stays short of 2^50, well inside its 24-bit floats' range, where
+ * two of 2^40 would pass it. a NaN or an infinity in a corner can stop the GPU
+ * for good, where the Dreamcast's PowerVR draws nothing of its triangle; the
+ * game makes some, as at Casinopolis's switch */
 inline bool sendable(float x, float y, float z)
 {
     uint32_t a, b, c;
@@ -445,7 +447,7 @@ inline bool sendable(float x, float y, float z)
     memcpy(&c, &z, 4);
     uint32_t most = std::max(a & 0x7f800000U, std::max(b & 0x7f800000U, c & 0x7f800000U));
 
-    return most < (127U + 40U) << 23;
+    return most < (127U + 24U) << 23;
 }
 
 /* texture coordinates past UV_FAR go back toward 0 by a whole number of
@@ -812,6 +814,15 @@ void draw_backdrop(Backend &b, uint32_t first)
 }
 
 /* draw the scene's batches on the top screen, for each eye */
+/* the picture last sent to the GPU, which sa3ds_dump_hang writes out where
+ * the GPU never finished it: its batches, and the rows and camera its world
+ * corners went through, which world_place replaces as the next picture
+ * begins. the corners stay in b.corners until the next is placed */
+std::vector<Placed> top, under;
+Backend *sent_by;
+uint32_t sent_corners;
+float sent_place[16], sent_camera[3], sent_slider;
+
 void render(Backend &b)
 {
     const std::vector<pc::Vertex> &vertices = b.scene.vertices();
@@ -839,7 +850,6 @@ void render(Backend &b)
     b.dying_textures.clear();
     /* each corner, placed once for both eyes. in play, the HUD's counters
      * go to the bottom screen instead */
-    static std::vector<Placed> top, under;
     uint32_t sent = 0;
     bool play = in_play();
 
@@ -924,6 +934,11 @@ void render(Backend &b)
     cmdbuf_peak = std::max(cmdbuf_peak, C3D_GetCmdBufUsage());
     sa3ds_ticks_parts[3] += svcGetSystemTick() - part_at;
     part_at = svcGetSystemTick();
+    sent_by = &b;
+    sent_corners = sent;
+    memcpy(sent_place, b.world_place, sizeof sent_place);
+    memcpy(sent_camera, b.camera, sizeof sent_camera);
+    sent_slider = slider;
     C3D_FrameEnd(0);
     sa3ds_ticks_parts[4] += svcGetSystemTick() - part_at;
     sa3ds_draw_step = 7;
@@ -1279,6 +1294,56 @@ void sa3ds_reuse(uint64_t *worked, uint64_t *reused)
     *worked = reuse_worked;
     *reused = reuse_reused;
     reuse_worked = reuse_reused = 0;
+}
+
+/* the picture the GPU never finished, to path: "SAHANG1\0", then u32s of
+ * the corners, the top screen's batches and the bottom's, the GPU's status
+ * word, then floats: the rows (16), the camera (3), the slider. each batch:
+ * u32 first, count, flags, texture, sample, then bytes blend, src, dst,
+ * depth, depth_write, cull, the texture's format, a pad, then u16 width and
+ * height. then the corners as they went: x y z w u v, and a u32 color */
+void sa3ds_dump_hang(const char *path)
+{
+    if (sent_by == nullptr) {
+        return;
+    }
+    FILE *out = fopen(path, "wb");
+
+    if (out == nullptr) {
+        return;
+    }
+    Backend &b = *sent_by;
+    u32 status = 0;
+
+    GSPGPU_ReadHWRegs(0x400034, &status, 4);
+    uint32_t head[4] = {sent_corners, (uint32_t)top.size(), (uint32_t)under.size(), status};
+
+    fwrite("SAHANG1", 1, 8, out);
+    fwrite(head, 4, 4, out);
+    fwrite(sent_place, 4, 16, out);
+    fwrite(sent_camera, 4, 3, out);
+    fwrite(&sent_slider, 4, 1, out);
+    for (const std::vector<Placed> *list : {&top, &under}) {
+        for (const Placed &p : *list) {
+            const pc::State &s = p.batch->state;
+            uint32_t words[5] = {p.first, p.count, s.flags, s.texture, s.sample};
+            uint8_t bytes[8] = {s.blend, s.src, s.dst, s.depth, s.depth_write, s.cull, 0xff, 0};
+            uint16_t side[2] = {0, 0};
+
+            if (s.texture != 0 && s.texture <= b.textures.size()) {
+                const C3D_Tex &t = b.textures[s.texture - 1].tex;
+
+                bytes[6] = (uint8_t)t.fmt;
+                side[0] = t.width;
+                side[1] = t.height;
+            }
+            fwrite(words, 4, 5, out);
+            fwrite(bytes, 1, 8, out);
+            fwrite(side, 2, 2, out);
+        }
+    }
+    fwrite(b.corners, sizeof(Corner), std::min(sent_corners, MOST_CORNERS), out);
+    fclose(out);
 }
 
 void sa3ds_unsent(uint32_t *triangles, uint32_t *views, uint32_t *uv_out, uint32_t *moved)

@@ -320,6 +320,13 @@ static void watchdog_main(void *unused)
                        (unsigned long)record_kind, records_taken,
                        texture_steps[(unsigned)sa3ds_texture_step % 6],
                        sa3ds_audio_busy ? "mixing" : "waiting");
+            /* the picture the GPU stopped on, once, where it stopped there */
+            if (stalled == WATCH_STALL * 2 && (sa3ds_draw_step & 7) == 2) {
+                extern void sa3ds_dump_hang(const char *path);
+
+                sa3ds_dump_hang("sdmc:/sa3ds/hang.bin");
+                native_log("sa3ds: the picture the GPU stopped on is in sa3ds/hang.bin");
+            }
         }
     }
 }
